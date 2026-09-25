@@ -33,13 +33,23 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
 
   deinit { NotificationCenter.default.removeObserver(self); UIDevice.current.endGeneratingDeviceOrientationNotifications() }
   @objc private func orientationChanged() {
-    guard let connection = output.connection(with: .video) else { return }
     let orientation = UIDevice.current.orientation
+    sessionQueue.async { [weak self] in
+      guard let self, let connection = output.connection(with: .video) else { return }
+      applyVideoOrientation(orientation, to: connection)
+      processingQueue.async { [weak self] in self?.resetFilter(reason: "Orientation changed — filter reset.") }
+    }
+  }
+
+  private func applyVideoOrientation(_ orientation: UIDeviceOrientation, to connection: AVCaptureConnection) {
     if #available(iOS 17.0, *) {
       let angle: CGFloat = orientation == .landscapeLeft ? 0 : (orientation == .landscapeRight ? 180 : 90)
-      if connection.isVideoRotationAngleSupported(angle) { connection.videoRotationAngle = angle }
-    } else if orientation == .landscapeLeft { connection.videoOrientation = .landscapeRight } else if orientation == .landscapeRight { connection.videoOrientation = .landscapeLeft } else { connection.videoOrientation = .portrait }
-    resetFilter(reason: "Orientation changed — filter reset.")
+      guard connection.isVideoRotationAngleSupported(angle) else { return }
+      connection.videoRotationAngle = angle
+    } else {
+      guard connection.isVideoOrientationSupported else { return }
+      if orientation == .landscapeLeft { connection.videoOrientation = .landscapeRight } else if orientation == .landscapeRight { connection.videoOrientation = .landscapeLeft } else { connection.videoOrientation = .portrait }
+    }
   }
 
   func attach(view: MTKView) { self.view = view }
@@ -53,7 +63,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     do { try found.lockForConfiguration(); found.activeFormat = selection.format; found.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(selection.fps)); found.activeVideoMaxFrameDuration = found.activeVideoMinFrameDuration; if found.isSmoothAutoFocusSupported { found.isSmoothAutoFocusEnabled = true }; found.unlockForConfiguration(); targetFPS = selection.fps } catch {}
     output.alwaysDiscardsLateVideoFrames = true; output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
     output.setSampleBufferDelegate(self, queue: processingQueue); if session.canAddOutput(output) { session.addOutput(output) }
-    if let connection = output.connection(with: .video) { if #available(iOS 17.0, *) { connection.videoRotationAngle = 90 } else { connection.videoOrientation = .portrait } }
+    if let connection = output.connection(with: .video) { applyVideoOrientation(.portrait, to: connection) }
     session.commitConfiguration(); session.startRunning(); emitStatus()
   }
 
