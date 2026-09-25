@@ -402,7 +402,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         (status.measuredFps > 4
                                 ? status.measuredFps * .45 - .01
                                 : 26)
-                            .clamp(.5, 54),
+                            .clamp(.5, 54)
+                            .toDouble(),
                     suffix: ' Hz',
                     onChanged: analyzing
                         ? null

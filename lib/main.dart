@@ -32,7 +32,7 @@ class MotionApp extends StatelessWidget {
       scaffoldBackgroundColor: const Color(0xff050b11),
       cardTheme: const CardThemeData(color: Color(0xff0d1b27)),
       sliderTheme: const SliderThemeData(
-        showValueIndicator: ShowValueIndicator.always,
+        showValueIndicator: ShowValueIndicator.onDrag,
       ),
     ),
     home: showOnboarding ? const OnboardingScreen() : const HomeScreen(),
