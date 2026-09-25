@@ -1,3 +1,4 @@
+import AVFoundation
 import Metal
 import XCTest
 @testable import Runner
