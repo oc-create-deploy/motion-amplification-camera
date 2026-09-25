@@ -477,7 +477,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         label: 'Gain',
                         value: parameters.gain,
                         min: 0,
-                        max: 100,
+                        max: 250,
                         suffix: '×',
                         onChanged: analyzing
                             ? null
@@ -489,7 +489,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       _SliderRow(
                         label: 'Low cutoff',
                         value: parameters.lowerHz,
-                        min: .1,
+                        min: .02,
                         max: 20,
                         suffix: ' Hz',
                         onChanged: analyzing

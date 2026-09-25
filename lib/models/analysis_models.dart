@@ -17,9 +17,9 @@ enum QualityState {
 
 class AnalysisParameters {
   const AnalysisParameters({
-    this.lowerHz = 1.0,
+    this.lowerHz = 0.1,
     this.upperHz = 8.0,
-    this.gain = 20.0,
+    this.gain = 40.0,
     this.quality = ProcessingQuality.balanced,
     this.colorMode = ColorMode.luminance,
   });
@@ -43,8 +43,8 @@ class AnalysisParameters {
     if (upperHz >= 0.45 * fps) {
       return 'Upper cutoff must stay below 45% of measured FPS.';
     }
-    if (!gain.isFinite || gain < 0 || gain > 100) {
-      return 'Gain must be between 0 and 100.';
+    if (!gain.isFinite || gain < 0 || gain > 250) {
+      return 'Gain must be between 0 and 250.';
     }
     return null;
   }

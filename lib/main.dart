@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'screens/home_screen.dart';
@@ -6,6 +7,9 @@ import 'screens/onboarding_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setPreferredOrientations(const [
+    DeviceOrientation.portraitUp,
+  ]);
   final prefs = await SharedPreferences.getInstance();
   runApp(
     MotionApp(showOnboarding: !(prefs.getBool('onboarding_complete') ?? false)),

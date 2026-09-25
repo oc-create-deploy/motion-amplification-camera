@@ -20,7 +20,7 @@ class AboutScreen extends StatelessWidget {
             ),
             _Section(
               'Algorithm',
-              'The native engine processes luminance through a spatial reduction stage. Two timestamp-aware first-order low-pass states form the temporal band-pass: LP(upper cutoff) − LP(lower cutoff). The amplified band is reconstructed and clamped on the GPU. Vision registration estimates ROI translation; a Hann-windowed vDSP FFT estimates dominant frequency.',
+              'The native engine builds a multi-scale Laplacian signal, applies a timestamp-aware temporal band-pass, estimates sub-pixel displacement in the gradient domain, and warps the original frame to visualize motion rather than brightness flicker. Float temporal state preserves very small signals. Vision registration estimates ROI translation; a Hann-windowed vDSP FFT estimates dominant frequency.',
             ),
             _Section(
               'Limitations',

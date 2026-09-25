@@ -36,6 +36,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   private var recordingStartedAt: CMTime?, recordedDuration = 0.0
   var onStatus: (([String: Any]) -> Void)?
   var isAmplificationPipelineReadyForTesting: Bool { pipeline != nil }
+  static let temporalStatePixelFormatForTesting: MTLPixelFormat = .r32Float
 
   override init() {
     guard let gpu = MTLCreateSystemDefaultDevice(), let queue = gpu.makeCommandQueue() else { fatalError("Metal is required") }
@@ -364,8 +365,26 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
 
   private func ensureTextures(width: Int, height: Int) {
     if fastState?.width == width && fastState?.height == height && !needsReset { return }
-    let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false); descriptor.usage = [.shaderRead, .shaderWrite]
-    fastState = device.makeTexture(descriptor: descriptor); slowState = device.makeTexture(descriptor: descriptor); outputTexture = device.makeTexture(descriptor: descriptor); needsReset = true
+    // R32Float retains small temporal changes that BGRA8 quantized away. This
+    // is essential for sub-pixel motion and very low-frequency analysis.
+    let stateDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+      pixelFormat: Self.temporalStatePixelFormatForTesting,
+      width: width,
+      height: height,
+      mipmapped: false
+    )
+    stateDescriptor.usage = [.shaderRead, .shaderWrite]
+    let outputDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+      pixelFormat: .bgra8Unorm,
+      width: width,
+      height: height,
+      mipmapped: false
+    )
+    outputDescriptor.usage = [.shaderRead, .shaderWrite]
+    fastState = device.makeTexture(descriptor: stateDescriptor)
+    slowState = device.makeTexture(descriptor: stateDescriptor)
+    outputTexture = device.makeTexture(descriptor: outputDescriptor)
+    needsReset = true
   }
   private func render(pixelBuffer: CVPixelBuffer, timestamp: CMTime, dt: Float) {
     guard let cache = textureCache else {
@@ -743,34 +762,50 @@ private let amplificationKernelSource = #"""
 using namespace metal;
 
 struct FilterUniforms { float dt, lowerHz, upperHz, gain; uint reset, luminanceOnly; };
+inline float luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
+inline float lumaAt(texture2d<float, access::sample> t, sampler s, float2 uv) {
+  return luminance(t.sample(s, uv).rgb);
+}
+inline float crossBlur(texture2d<float, access::sample> t, sampler s,
+                       float2 uv, float2 texel, float radius) {
+  float2 d = texel * radius;
+  return lumaAt(t,s,uv)*0.40
+    + (lumaAt(t,s,uv+float2(d.x,0.0))+lumaAt(t,s,uv-float2(d.x,0.0))
+    + lumaAt(t,s,uv+float2(0.0,d.y))+lumaAt(t,s,uv-float2(0.0,d.y)))*0.15;
+}
 
-kernel void amplifyLuma(texture2d<float, access::read> input [[texture(0)]],
+kernel void amplifyLuma(texture2d<float, access::sample> input [[texture(0)]],
                         texture2d<float, access::read_write> fastState [[texture(1)]],
                         texture2d<float, access::read_write> slowState [[texture(2)]],
                         texture2d<float, access::write> output [[texture(3)]],
                         constant FilterUniforms &p [[buffer(0)]],
                         uint2 gid [[thread_position_in_grid]]) {
   if (gid.x >= input.get_width() || gid.y >= input.get_height()) return;
-  const uint2 maxCoord = uint2(input.get_width() - 1, input.get_height() - 1);
-  float4 original = input.read(gid);
-  float4 spatial = original * 0.5;
-  spatial += input.read(uint2(uint(max(int(gid.x)-1, 0)), gid.y)) * 0.125;
-  spatial += input.read(uint2(min(gid.x+1, maxCoord.x), gid.y)) * 0.125;
-  spatial += input.read(uint2(gid.x, uint(max(int(gid.y)-1, 0)))) * 0.125;
-  spatial += input.read(uint2(gid.x, min(gid.y+1, maxCoord.y))) * 0.125;
-  float luma = dot(spatial.rgb, float3(0.2126, 0.7152, 0.0722));
-  float4 x = p.luminanceOnly != 0 ? float4(luma, luma, luma, original.a) : spatial;
-  float4 fast = p.reset != 0 ? x : fastState.read(gid);
-  float4 slow = p.reset != 0 ? x : slowState.read(gid);
+  constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
+  float2 size = float2(input.get_width(), input.get_height());
+  float2 texel = 1.0/size;
+  float2 uv = (float2(gid)+0.5)*texel;
+  float center=lumaAt(input,s,uv);
+  float b1=crossBlur(input,s,uv,texel,1.0);
+  float b2=crossBlur(input,s,uv,texel,2.0);
+  float b4=crossBlur(input,s,uv,texel,4.0);
+  float signal=(center-b1)*0.50+(b1-b2)*0.32+(b2-b4)*0.18;
+  float fast=p.reset!=0 ? signal : fastState.read(gid).r;
+  float slow=p.reset!=0 ? signal : slowState.read(gid).r;
   if (p.reset == 0 && p.dt > 0) {
-    float fastAlpha = 1.0 - exp(-2.0 * M_PI_F * p.upperHz * p.dt);
-    float slowAlpha = 1.0 - exp(-2.0 * M_PI_F * p.lowerHz * p.dt);
-    fast += fastAlpha * (x - fast);
-    slow += slowAlpha * (x - slow);
+    fast += (1.0-exp(-2.0*M_PI_F*p.upperHz*p.dt))*(signal-fast);
+    slow += (1.0-exp(-2.0*M_PI_F*p.lowerHz*p.dt))*(signal-slow);
   }
-  fastState.write(fast, gid);
-  slowState.write(slow, gid);
-  output.write(clamp(original + p.gain * (fast - slow), 0.0, 1.0), gid);
+  fastState.write(float4(fast),gid); slowState.write(float4(slow),gid);
+  float gx=0.50*(lumaAt(input,s,uv+float2(texel.x,0))-lumaAt(input,s,uv-float2(texel.x,0)))
+    +0.075*(lumaAt(input,s,uv+float2(4.0*texel.x,0))-lumaAt(input,s,uv-float2(4.0*texel.x,0)));
+  float gy=0.50*(lumaAt(input,s,uv+float2(0,texel.y))-lumaAt(input,s,uv-float2(0,texel.y)))
+    +0.075*(lumaAt(input,s,uv+float2(0,4.0*texel.y))-lumaAt(input,s,uv-float2(0,4.0*texel.y)));
+  float2 g=float2(gx,gy); float e=dot(g,g);
+  float confidence=smoothstep(0.00002,0.003,e);
+  float2 d=-(fast-slow)*g/max(e,0.00002);
+  float2 amplified=clamp(d*p.gain*confidence,float2(-32.0),float2(32.0));
+  output.write(clamp(input.sample(s,uv-amplified*texel),0.0,1.0),gid);
 }
 """#
 

@@ -11,6 +11,17 @@ final class MotionCameraEngineTests: XCTestCase {
     XCTAssertTrue(MotionCameraEngine().isAmplificationPipelineReadyForTesting)
   }
 
+  func testTemporalStatePreservesSubPixelPrecision() {
+    XCTAssertEqual(MotionCameraEngine.temporalStatePixelFormatForTesting, .r32Float)
+  }
+
+  func testApplicationDeclaresPortraitOnly() {
+    let orientations = Bundle.main.object(
+      forInfoDictionaryKey: "UISupportedInterfaceOrientations"
+    ) as? [String]
+    XCTAssertEqual(orientations, ["UIInterfaceOrientationPortrait"])
+  }
+
   func testPortraitSoftwareRotationIsUpright() {
     let angle = MotionCameraEngine.fallbackVideoRotationAngle(for: .portrait)
     XCTAssertEqual(angle, 90)

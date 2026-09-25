@@ -93,3 +93,7 @@ Run on a physical iPhone to validate camera formats, torch, Photos, actual FPS, 
 ## Validation status
 
 Dart tests cover band validation/Nyquist limits, calibration math, calibrated and uncalibrated session CSV behavior, and the timestamp-aware reference band-pass with synthetic sines. Swift tests cover the filter coefficient, synthetic FFT frequency detection, and calibration conversion. GitHub Actions runs formatting, analysis, Dart tests, an unsigned simulator build, and native XCTest on macOS. This Linux development host does not provide Flutter/Xcode; see the latest CI run for Apple-toolchain proof.
+The native GPU engine uses an independently implemented, multi-scale
+gradient-domain Eulerian motion-magnification pipeline. It draws on published
+motion-magnification research, but it is not RDI Technologies software and does
+not claim to reproduce RDI's proprietary algorithms or calibrated hardware.
