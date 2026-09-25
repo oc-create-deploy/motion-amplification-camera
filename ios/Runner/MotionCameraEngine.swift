@@ -13,11 +13,10 @@ enum EngineError: LocalizedError {
 }
 
 final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, MTKViewDelegate {
-  // Flutter embeds MTKView through UiKitView with the drawable presented in
-  // the opposite half-turn from the portrait camera buffer on physical iOS
-  // devices. Keep this correction presentation-only: recorded frames already
-  // have the correct Core Image orientation and must not be rotated again.
-  static let previewDisplayExifOrientation: Int32 = 3
+  // Flutter's UiKitView/MTKView bridge presents Core Image's bottom-left
+  // coordinate system vertically inverted on physical iOS devices. Correct
+  // that presentation-only Y flip here. A 180-degree rotation also made the
+  // image upright, but introduced an unwanted horizontal mirror.
   let device: MTLDevice
   private let session = AVCaptureSession(), sessionQueue = DispatchQueue(label: "camera.session"), processingQueue = DispatchQueue(label: "camera.processing", qos: .userInitiated)
   private let output = AVCaptureVideoDataOutput(), commandQueue: MTLCommandQueue, ciContext: CIContext
@@ -304,11 +303,18 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       CGRect(x: 0, y: 0, width: 1, height: 1)
     )
     return CGRect(
-      x: 1 - clipped.maxX,
+      x: clipped.minX,
       y: 1 - clipped.maxY,
       width: clipped.width,
       height: clipped.height
     )
+  }
+
+  static func previewDisplayTransform(for extent: CGRect) -> CGAffineTransform {
+    CGAffineTransform(
+      translationX: 0,
+      y: extent.minY + extent.maxY
+    ).scaledBy(x: 1, y: -1)
   }
 
   func setROI(_ args: [String: Any]) {
@@ -435,8 +441,8 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     guard let image = latestImage,
           let drawable = view.currentDrawable,
           let command = commandQueue.makeCommandBuffer() else { return }
-    let previewImage = image.oriented(
-      forExifOrientation: Self.previewDisplayExifOrientation
+    let previewImage = image.transformed(
+      by: Self.previewDisplayTransform(for: image.extent)
     )
     let target = CGRect(origin: .zero, size: view.drawableSize)
     let scale = max(

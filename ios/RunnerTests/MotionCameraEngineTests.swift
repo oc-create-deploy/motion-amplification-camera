@@ -21,15 +21,21 @@ final class MotionCameraEngineTests: XCTestCase {
     )
   }
 
-  func testUiKitPreviewUsesPresentationOnlyHalfTurn() {
-    XCTAssertEqual(MotionCameraEngine.previewDisplayExifOrientation, 3)
+  func testUiKitPreviewUsesPresentationOnlyVerticalFlip() {
+    let transform = MotionCameraEngine.previewDisplayTransform(
+      for: CGRect(x: 0, y: 0, width: 720, height: 1280)
+    )
+    XCTAssertEqual(transform.a, 1, accuracy: 0.000_001)
+    XCTAssertEqual(transform.d, -1, accuracy: 0.000_001)
+    XCTAssertEqual(transform.tx, 0, accuracy: 0.000_001)
+    XCTAssertEqual(transform.ty, 1280, accuracy: 0.000_001)
   }
 
-  func testUiKitPreviewROIRemainsAlignedAfterHalfTurn() {
+  func testUiKitPreviewROIRemainsAlignedAfterVerticalFlip() {
     let mapped = MotionCameraEngine.cameraROI(
       fromPreviewROI: CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.4)
     )
-    XCTAssertEqual(mapped.origin.x, 0.6, accuracy: 0.000_001)
+    XCTAssertEqual(mapped.origin.x, 0.1, accuracy: 0.000_001)
     XCTAssertEqual(mapped.origin.y, 0.4, accuracy: 0.000_001)
     XCTAssertEqual(mapped.width, 0.3, accuracy: 0.000_001)
     XCTAssertEqual(mapped.height, 0.4, accuracy: 0.000_001)
