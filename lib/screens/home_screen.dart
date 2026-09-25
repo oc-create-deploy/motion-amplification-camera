@@ -28,6 +28,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   CameraStatus status = const CameraStatus();
   Calibration? calibration;
   bool analyzing = false,
+      finalizing = false,
       focusLocked = false,
       exposureLocked = false,
       whiteBalanceLocked = false,
@@ -64,14 +65,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     subscription?.cancel();
-    camera.stop();
+    camera.cancel();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed && analyzing) {
-      _stop(showSummary: false);
+      camera.cancel();
+      setState(() {
+        analyzing = false;
+        finalizing = false;
+      });
     }
   }
 
@@ -117,13 +122,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _stop({bool showSummary = true}) async {
-    await camera.stop();
-    if (!mounted) {
-      return;
-    }
     final began = startedAt;
-    setState(() => analyzing = false);
-    if (showSummary && began != null) {
+    setState(() => finalizing = true);
+    try {
+      final video = await camera.stop();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        analyzing = false;
+        finalizing = false;
+      });
+      if (!showSummary || began == null) {
+        return;
+      }
       final result = SessionResult(
         startedAt: began,
         durationSeconds: DateTime.now().difference(began).inMilliseconds / 1000,
@@ -134,8 +146,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
       await Navigator.push(
         context,
-        MaterialPageRoute(builder: (_) => SessionSummaryScreen(result: result)),
+        MaterialPageRoute(
+          builder: (_) => SessionSummaryScreen(
+            result: result,
+            video: video,
+            camera: camera,
+          ),
+        ),
       );
+    } on PlatformException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        analyzing = false;
+        finalizing = false;
+      });
+      _message(error.message ?? 'Could not finalize the amplified video.');
     }
   }
 
@@ -213,6 +240,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           creationParamsCodec: StandardMessageCodec(),
                         ),
                       ),
+                      if (!status.previewActive)
+                        const ColoredBox(
+                          color: Colors.black,
+                          child: Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                CircularProgressIndicator(),
+                                SizedBox(height: 12),
+                                Text('Starting live camera preview…'),
+                              ],
+                            ),
+                          ),
+                        ),
                       LayoutBuilder(
                         builder: (context, cameraBounds) => GestureDetector(
                           behavior: HitTestBehavior.translucent,
@@ -264,6 +305,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               : Colors.amber,
                         ),
                       ),
+                      if (analyzing)
+                        Positioned(
+                          top: 44,
+                          left: 8,
+                          child: _StatusChip(
+                            label:
+                                '● REC ${status.recordedDuration.toStringAsFixed(1)} s',
+                            color: status.recording
+                                ? Colors.redAccent
+                                : Colors.amber,
+                          ),
+                        ),
                       Positioned(
                         top: 8,
                         right: 8,
@@ -555,12 +608,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             backgroundColor:
                                 analyzing ? Colors.orange.shade800 : null,
                           ),
-                          onPressed: analyzing ? _stop : _start,
-                          icon: Icon(analyzing ? Icons.stop : Icons.play_arrow),
+                          onPressed: finalizing
+                              ? null
+                              : analyzing
+                                  ? _stop
+                                  : _start,
+                          icon: finalizing
+                              ? const SizedBox.square(
+                                  dimension: 20,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : Icon(analyzing ? Icons.stop : Icons.play_arrow),
                           label: Text(
-                            analyzing
-                                ? 'Stop & view summary'
-                                : 'Start analysis',
+                            finalizing
+                                ? 'Finalizing amplified video…'
+                                : analyzing
+                                    ? 'Stop & save results'
+                                    : 'Start analysis & recording',
                           ),
                         ),
                       ),
@@ -707,20 +772,62 @@ class _RoiPainter extends CustomPainter {
 }
 
 class SessionSummaryScreen extends StatelessWidget {
-  const SessionSummaryScreen({super.key, required this.result});
+  const SessionSummaryScreen({
+    super.key,
+    required this.result,
+    required this.video,
+    required this.camera,
+  });
   final SessionResult result;
-  Future<void> _export(BuildContext context) async {
+  final RecordedVideo video;
+  final NativeCameraController camera;
+
+  Future<File> _csvFile() async {
     final dir = await getTemporaryDirectory();
     final file = File(
       '${dir.path}/motion-session-${result.startedAt.millisecondsSinceEpoch}.csv',
     );
     await file.writeAsString(result.toCsv(), flush: true);
+    return file;
+  }
+
+  Future<void> _exportCsv(BuildContext context) async {
+    final file = await _csvFile();
     await SharePlus.instance.share(
       ShareParams(
         files: [XFile(file.path)],
         subject: 'Motion Amplification session summary',
       ),
     );
+  }
+
+  Future<void> _shareResults(BuildContext context) async {
+    final csv = await _csvFile();
+    await SharePlus.instance.share(
+      ShareParams(
+        files: [XFile(video.path), XFile(csv.path)],
+        subject: 'Motion Amplification amplified video and session data',
+        text:
+            'Amplified inspection video with CSV measurements. Inspection aid only; not safety-certified or metrology-grade.',
+      ),
+    );
+  }
+
+  Future<void> _saveVideo(BuildContext context) async {
+    try {
+      await camera.saveVideoToPhotos(video.path);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Amplified video saved to Photos.')),
+        );
+      }
+    } on PlatformException catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.message ?? 'Could not save video.')),
+        );
+      }
+    }
   }
 
   @override
@@ -732,6 +839,10 @@ class SessionSummaryScreen extends StatelessWidget {
             _SummaryRow(
               'Duration',
               '${result.durationSeconds.toStringAsFixed(1)} s',
+            ),
+            _SummaryRow(
+              'Amplified video',
+              '${video.durationSeconds.toStringAsFixed(1)} s · ${video.frameCount} frames · H.264 MP4',
             ),
             _SummaryRow('Measured FPS', result.measuredFps.toStringAsFixed(2)),
             _SummaryRow(
@@ -767,9 +878,21 @@ class SessionSummaryScreen extends StatelessWidget {
             ),
             const SizedBox(height: 20),
             FilledButton.icon(
-              onPressed: () => _export(context),
+              onPressed: () => _saveVideo(context),
+              icon: const Icon(Icons.video_library_outlined),
+              label: const Text('Save amplified video to Photos'),
+            ),
+            const SizedBox(height: 10),
+            FilledButton.tonalIcon(
+              onPressed: () => _shareResults(context),
               icon: const Icon(Icons.ios_share),
-              label: const Text('Export CSV'),
+              label: const Text('Share video + CSV'),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: () => _exportCsv(context),
+              icon: const Icon(Icons.table_view_outlined),
+              label: const Text('Export CSV only'),
             ),
           ],
         ),

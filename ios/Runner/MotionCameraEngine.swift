@@ -10,7 +10,7 @@ enum EngineError: LocalizedError {
   var errorDescription: String? { switch self { case .noCamera: return "No compatible rear camera is available."; case .invalidBand(let s), .configuration(let s): return s } }
 }
 
-final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, MTKViewDelegate {
   let device: MTLDevice
   private let session = AVCaptureSession(), sessionQueue = DispatchQueue(label: "camera.session"), processingQueue = DispatchQueue(label: "camera.processing", qos: .userInitiated)
   private let output = AVCaptureVideoDataOutput(), commandQueue: MTLCommandQueue, ciContext: CIContext
@@ -20,6 +20,12 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   private var previousPixelBuffer: CVPixelBuffer?, lastTimestamp: CMTime?, fpsTimes = [Double](), displacement = [(time: Double, x: Double, y: Double)]()
   private var analyzing = false, needsReset = true, targetFPS = 60.0, measuredFPS = 0.0, lowerHz = 1.0, upperHz = 8.0, gain = 20.0, quality = "balanced", colorMode = "luminance"
   private var latestImage: CIImage?, droppedFrames = 0, frameIndex = 0, frameWidth = 0, registrationAttempts = 0, registrationSuccesses = 0
+  private var cameraReady = false, previewActive = false, recordingRequested = false
+  // EXIF orientation applied in Core Image when an AVCapture connection cannot
+  // rotate buffers in hardware (observed on current iPhone/iOS combinations).
+  private var softwareExifOrientation: Int32 = 1
+  private var recorder: AmplifiedVideoRecorder?, recordingURL: URL?, recordingError: String?
+  private var recordingStartedAt: CMTime?, recordedDuration = 0.0
   var onStatus: (([String: Any]) -> Void)?
 
   override init() {
@@ -44,27 +50,75 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   private func applyVideoOrientation(_ orientation: UIDeviceOrientation, to connection: AVCaptureConnection) {
     if #available(iOS 17.0, *) {
       let angle: CGFloat = orientation == .landscapeLeft ? 0 : (orientation == .landscapeRight ? 180 : 90)
-      guard connection.isVideoRotationAngleSupported(angle) else { return }
-      connection.videoRotationAngle = angle
+      if connection.isVideoRotationAngleSupported(angle) {
+        connection.videoRotationAngle = angle
+        softwareExifOrientation = 1
+      } else {
+        softwareExifOrientation = orientation == .landscapeLeft ? 1 : (orientation == .landscapeRight ? 3 : 6)
+      }
     } else {
-      guard connection.isVideoOrientationSupported else { return }
-      if orientation == .landscapeLeft { connection.videoOrientation = .landscapeRight } else if orientation == .landscapeRight { connection.videoOrientation = .landscapeLeft } else { connection.videoOrientation = .portrait }
+      if connection.isVideoOrientationSupported {
+        if orientation == .landscapeLeft { connection.videoOrientation = .landscapeRight } else if orientation == .landscapeRight { connection.videoOrientation = .landscapeLeft } else { connection.videoOrientation = .portrait }
+        softwareExifOrientation = 1
+      } else {
+        softwareExifOrientation = orientation == .landscapeLeft ? 1 : (orientation == .landscapeRight ? 3 : 6)
+      }
     }
   }
 
-  func attach(view: MTKView) { self.view = view }
-  func startCapture() { sessionQueue.async { [weak self] in self?.configureSessionIfNeeded() } }
+  func attach(view: MTKView) {
+    self.view = view
+    view.device = device
+    view.colorPixelFormat = .bgra8Unorm
+    view.framebufferOnly = false
+    view.enableSetNeedsDisplay = true
+    view.isPaused = true
+    view.delegate = self
+  }
+
+  func startCapture() {
+    switch AVCaptureDevice.authorizationStatus(for: .video) {
+    case .authorized:
+      sessionQueue.async { [weak self] in self?.configureSessionIfNeeded() }
+    case .notDetermined:
+      AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+        guard let self else { return }
+        if granted {
+          sessionQueue.async { [weak self] in self?.configureSessionIfNeeded() }
+        } else {
+          emitStatus(warning: "Camera permission was denied. Enable Camera in Settings.")
+        }
+      }
+    case .denied, .restricted:
+      emitStatus(warning: "Camera access is unavailable. Enable Camera in Settings.")
+    @unknown default:
+      emitStatus(warning: "Camera access could not be determined.")
+    }
+  }
   private func configureSessionIfNeeded() {
     guard session.inputs.isEmpty else { if !session.isRunning { session.startRunning() }; return }
     session.beginConfiguration(); session.sessionPreset = .inputPriority
-    guard let found = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back), let input = try? AVCaptureDeviceInput(device: found), session.canAddInput(input) else { session.commitConfiguration(); return }
+    guard let found = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back), let input = try? AVCaptureDeviceInput(device: found), session.canAddInput(input) else {
+      session.commitConfiguration()
+      emitStatus(warning: "The rear camera could not be configured.")
+      return
+    }
     camera = found; session.addInput(input)
     let selection = Self.bestFormat(for: found)
     do { try found.lockForConfiguration(); found.activeFormat = selection.format; found.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(selection.fps)); found.activeVideoMaxFrameDuration = found.activeVideoMinFrameDuration; if found.isSmoothAutoFocusSupported { found.isSmoothAutoFocusEnabled = true }; found.unlockForConfiguration(); targetFPS = selection.fps } catch {}
     output.alwaysDiscardsLateVideoFrames = true; output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
-    output.setSampleBufferDelegate(self, queue: processingQueue); if session.canAddOutput(output) { session.addOutput(output) }
+    output.setSampleBufferDelegate(self, queue: processingQueue)
+    guard session.canAddOutput(output) else {
+      session.commitConfiguration()
+      emitStatus(warning: "The camera video output could not be configured.")
+      return
+    }
+    session.addOutput(output)
     if let connection = output.connection(with: .video) { applyVideoOrientation(.portrait, to: connection) }
-    session.commitConfiguration(); session.startRunning(); emitStatus()
+    session.commitConfiguration()
+    session.startRunning()
+    cameraReady = session.isRunning
+    emitStatus(warning: cameraReady ? nil : "The camera session did not start.")
   }
 
   static func bestFormat(for device: AVCaptureDevice, prefer120: Bool = false) -> (format: AVCaptureDevice.Format, fps: Double) {
@@ -98,8 +152,66 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       do { try camera.lockForConfiguration(); camera.activeFormat = selection.format; camera.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 120); camera.activeVideoMaxFrameDuration = camera.activeVideoMinFrameDuration; camera.unlockForConfiguration(); targetFPS = 120; resetFilter(reason: "Capture format changed — filter reset.") } catch {}
     }
   }
-  func startAnalysis() throws { guard camera != nil else { throw EngineError.noCamera }; analyzing = true; resetFilter(reason: nil); emitStatus() }
-  func stopAnalysis() { analyzing = false; emitStatus() }
+  func startAnalysis() throws {
+    guard camera != nil, cameraReady else { throw EngineError.noCamera }
+    processingQueue.sync {
+      recorder?.cancel()
+      recorder = nil
+      recordingURL = nil
+      recordingError = nil
+      recordingStartedAt = nil
+      recordedDuration = 0
+      recordingRequested = true
+      analyzing = true
+      resetFilter(reason: nil)
+    }
+    emitStatus()
+  }
+
+  func stopAnalysis(completion: @escaping (Result<RecordingResult, Error>) -> Void) {
+    processingQueue.async { [weak self] in
+      guard let self else { return }
+      analyzing = false
+      recordingRequested = false
+      guard let recorder else {
+        let message = recordingError ?? "No amplified frames were recorded. Keep the camera visible and try again."
+        recordingError = message
+        emitStatus(warning: message)
+        DispatchQueue.main.async { completion(.failure(EngineError.configuration(message))) }
+        return
+      }
+      self.recorder = nil
+      recorder.finish { [weak self] result in
+        guard let self else { return }
+        switch result {
+        case .success(let recording):
+          recordingURL = recording.url
+          recordedDuration = recording.durationSeconds
+          recordingError = nil
+          emitStatus()
+          DispatchQueue.main.async { completion(.success(recording)) }
+        case .failure(let error):
+          recordingError = error.localizedDescription
+          emitStatus(warning: error.localizedDescription)
+          DispatchQueue.main.async { completion(.failure(error)) }
+        }
+      }
+    }
+  }
+
+  func cancelAnalysis() {
+    processingQueue.async { [weak self] in
+      guard let self else { return }
+      analyzing = false
+      recordingRequested = false
+      recorder?.cancel()
+      recorder = nil
+      recordingURL = nil
+      recordingStartedAt = nil
+      recordedDuration = 0
+      emitStatus()
+    }
+  }
   func setROI(_ args: [String: Any]) { roi = CGRect(x: args["left"] as? Double ?? 0.2, y: args["top"] as? Double ?? 0.25, width: args["width"] as? Double ?? 0.6, height: args["height"] as? Double ?? 0.4).standardized.intersection(CGRect(x: 0, y: 0, width: 1, height: 1)); resetFilter(reason: nil) }
   func resetROI() { roi = CGRect(x: 0.2, y: 0.25, width: 0.6, height: 0.4); resetFilter(reason: nil) }
   func setLock(kind: String, locked: Bool) throws { guard let camera else { throw EngineError.noCamera }; try camera.lockForConfiguration(); defer { camera.unlockForConfiguration() }; switch kind { case "focus": if camera.isFocusModeSupported(locked ? .locked : .continuousAutoFocus) { camera.focusMode = locked ? .locked : .continuousAutoFocus }; case "exposure": if camera.isExposureModeSupported(locked ? .locked : .continuousAutoExposure) { camera.exposureMode = locked ? .locked : .continuousAutoExposure }; case "whiteBalance": if camera.isWhiteBalanceModeSupported(locked ? .locked : .continuousAutoWhiteBalance) { camera.whiteBalanceMode = locked ? .locked : .continuousAutoWhiteBalance }; default: break } }
@@ -109,12 +221,11 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) { droppedFrames += 1 }
   func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
     guard let pixel = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-    frameWidth = CVPixelBufferGetWidth(pixel)
     let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer), seconds = timestamp.seconds
     var dt = lastTimestamp.map { timestamp.seconds - $0.seconds } ?? 0
     if dt <= 0 || dt > 0.25 { resetFilter(reason: dt > 0.25 ? "Frame discontinuity — filter reset." : nil); dt = 0 }
     lastTimestamp = timestamp; fpsTimes.append(seconds); while fpsTimes.count > 2 && seconds - fpsTimes[0] > 1 { fpsTimes.removeFirst() }; if fpsTimes.count > 1 { measuredFPS = Double(fpsTimes.count - 1) / max(0.001, seconds - fpsTimes[0]) }
-    render(pixelBuffer: pixel, dt: Float(dt)); frameIndex += 1
+    render(pixelBuffer: pixel, timestamp: timestamp, dt: Float(dt)); frameIndex += 1
     let registrationStride = quality == "detail" ? 2 : (quality == "performance" ? 4 : 3)
     if analyzing && frameIndex % registrationStride == 0 { register(pixelBuffer: pixel, timestamp: seconds) }
     if frameIndex % 6 == 0 { emitStatus(warning: warning(for: pixel)) }
@@ -125,18 +236,85 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false); descriptor.usage = [.shaderRead, .shaderWrite]
     fastState = device.makeTexture(descriptor: descriptor); slowState = device.makeTexture(descriptor: descriptor); outputTexture = device.makeTexture(descriptor: descriptor); needsReset = true
   }
-  private func render(pixelBuffer: CVPixelBuffer, dt: Float) {
-    guard let cache = textureCache, let pipeline, let drawable = view?.currentDrawable else { return }
+  private func render(pixelBuffer: CVPixelBuffer, timestamp: CMTime, dt: Float) {
+    guard let cache = textureCache, let pipeline else { return }
     let width = CVPixelBufferGetWidth(pixelBuffer), height = CVPixelBufferGetHeight(pixelBuffer); ensureTextures(width: width, height: height)
     var cvTexture: CVMetalTexture?; CVMetalTextureCacheCreateTextureFromImage(nil, cache, pixelBuffer, nil, .bgra8Unorm, width, height, 0, &cvTexture)
     guard let input = cvTexture.flatMap(CVMetalTextureGetTexture), let fastState, let slowState, let rendered = outputTexture, let command = commandQueue.makeCommandBuffer(), let encoder = command.makeComputeCommandEncoder() else { return }
     encoder.setComputePipelineState(pipeline); encoder.setTexture(input, index: 0); encoder.setTexture(fastState, index: 1); encoder.setTexture(slowState, index: 2); encoder.setTexture(rendered, index: 3)
     var params = FilterUniforms(dt: dt, lowerHz: Float(lowerHz), upperHz: Float(upperHz), gain: analyzing ? Float(gain) : 0, reset: needsReset ? 1 : 0, luminanceOnly: colorMode == "luminance" ? 1 : 0)
     encoder.setBytes(&params, length: MemoryLayout<FilterUniforms>.stride, index: 0); let threads = MTLSize(width: 16, height: 16, depth: 1); encoder.dispatchThreads(MTLSize(width: width, height: height, depth: 1), threadsPerThreadgroup: threads); encoder.endEncoding()
-    guard let image = CIImage(mtlTexture: rendered, options: [.colorSpace: CGColorSpaceCreateDeviceRGB()]) else { return }
-    let sx = CGFloat(drawable.texture.width) / image.extent.width, sy = CGFloat(drawable.texture.height) / image.extent.height
-    let displayImage = image.transformed(by: CGAffineTransform(scaleX: max(sx, sy), y: max(sx, sy)))
-    ciContext.render(displayImage, to: drawable.texture, commandBuffer: command, bounds: CGRect(x: 0, y: 0, width: drawable.texture.width, height: drawable.texture.height), colorSpace: CGColorSpaceCreateDeviceRGB()); latestImage = image; command.present(drawable); command.commit(); needsReset = false
+    command.commit()
+    command.waitUntilCompleted()
+    guard command.status == .completed,
+          let rawImage = CIImage(mtlTexture: rendered, options: [.colorSpace: CGColorSpaceCreateDeviceRGB()]) else { return }
+    let image = softwareExifOrientation == 1
+      ? rawImage
+      : rawImage.oriented(forExifOrientation: softwareExifOrientation)
+    frameWidth = Int(image.extent.width)
+    latestImage = image
+    previewActive = true
+    DispatchQueue.main.async { [weak self] in self?.view?.setNeedsDisplay() }
+    if recordingRequested && analyzing {
+      appendAmplifiedFrame(
+        image,
+        timestamp: timestamp,
+        width: Int(image.extent.width),
+        height: Int(image.extent.height)
+      )
+    }
+    needsReset = false
+  }
+
+  func draw(in view: MTKView) {
+    guard let image = latestImage,
+          let drawable = view.currentDrawable,
+          let command = commandQueue.makeCommandBuffer() else { return }
+    let target = CGRect(origin: .zero, size: view.drawableSize)
+    let scale = max(target.width / image.extent.width, target.height / image.extent.height)
+    let scaled = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+    let offset = CGAffineTransform(
+      translationX: (target.width - scaled.extent.width) / 2 - scaled.extent.minX,
+      y: (target.height - scaled.extent.height) / 2 - scaled.extent.minY
+    )
+    let displayImage = scaled.transformed(by: offset)
+    ciContext.render(
+      displayImage,
+      to: drawable.texture,
+      commandBuffer: command,
+      bounds: target,
+      colorSpace: CGColorSpaceCreateDeviceRGB()
+    )
+    command.present(drawable)
+    command.commit()
+  }
+
+  func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
+
+  private func appendAmplifiedFrame(_ image: CIImage, timestamp: CMTime, width: Int, height: Int) {
+    do {
+      if recorder == nil {
+        let url = FileManager.default.temporaryDirectory
+          .appendingPathComponent("amplified-motion-\(UUID().uuidString).mp4")
+        recorder = try AmplifiedVideoRecorder(
+          outputURL: url,
+          width: width,
+          height: height,
+          expectedFPS: measuredFPS > 0 ? measuredFPS : targetFPS,
+          ciContext: ciContext
+        )
+        recordingURL = url
+      }
+      try recorder?.append(image: image, timestamp: timestamp)
+      if recordingStartedAt == nil { recordingStartedAt = timestamp }
+      if let recordingStartedAt { recordedDuration = max(0, timestamp.seconds - recordingStartedAt.seconds) }
+    } catch {
+      recordingError = error.localizedDescription
+      recordingRequested = false
+      recorder?.cancel()
+      recorder = nil
+      emitStatus(warning: "Video recording stopped: \(error.localizedDescription)")
+    }
   }
 
   private func register(pixelBuffer: CVPixelBuffer, timestamp: Double) {
@@ -155,9 +333,175 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     let confidence = trackingSuccess * min(1, Double(recent.count) / 60); return (last.x, last.y, sqrt(Double(meanSquare)), peak, frequency, confidence)
   }
   private func warning(for pixel: CVPixelBuffer) -> String? { if measuredFPS > 0 && upperHz >= 0.45 * measuredFPS { return "Band exceeds the Nyquist-safe limit for measured FPS." }; if droppedFrames > 3 { droppedFrames = 0; return "Frames dropped — reduce processing quality or improve lighting." }; if let camera, camera.iso > camera.activeFormat.maxISO * 0.8 { return "Low light — add steady lighting and avoid flicker." }; if let camera, abs(camera.exposureTargetOffset) > 1.5 { return "Exposure clipping risk — adjust lighting or exposure." }; let m = metrics(); if m.peak > 12 { return "Excessive camera/scene motion; stabilize the tripod." }; if m.confidence < 0.35 && analyzing { return "Low tracking confidence; select a textured ROI." }; return nil }
-  func emitStatus(warning: String? = nil) { let m = metrics(); var status: [String: Any] = ["targetFps": targetFPS, "measuredFps": measuredFPS, "frameWidth": frameWidth, "torchAvailable": camera?.hasTorch ?? false, "running": analyzing, "x": m.x, "y": m.y, "rms": m.rms, "peak": m.peak, "frequency": m.frequency, "confidence": m.confidence, "timestamp": lastTimestamp?.seconds ?? 0, "quality": warning == nil ? (analyzing ? "good" : "idle") : qualityName(warning!)]; if let warning { status["warning"] = warning }; onStatus?(status) }
+  func emitStatus(warning: String? = nil) {
+    let m = metrics()
+    var status: [String: Any] = [
+      "targetFps": targetFPS,
+      "measuredFps": measuredFPS,
+      "frameWidth": frameWidth,
+      "torchAvailable": camera?.hasTorch ?? false,
+      "cameraReady": cameraReady,
+      "previewActive": previewActive,
+      "running": analyzing,
+      "recording": recorder != nil && recordingRequested,
+      "recordedDuration": recordedDuration,
+      "x": m.x,
+      "y": m.y,
+      "rms": m.rms,
+      "peak": m.peak,
+      "frequency": m.frequency,
+      "confidence": m.confidence,
+      "timestamp": lastTimestamp?.seconds ?? 0,
+      "quality": warning == nil ? (analyzing ? "good" : "idle") : qualityName(warning!),
+    ]
+    if let recordingError { status["recordingError"] = recordingError }
+    if let warning { status["warning"] = warning }
+    onStatus?(status)
+  }
   private func qualityName(_ warning: String) -> String { if warning.contains("dropped") { return "droppedFrames" }; if warning.contains("texture") { return "lowTexture" }; if warning.contains("motion") { return "cameraMotion" }; if warning.contains("Band") { return "invalidBand" }; if warning.contains("Low light") { return "lowLight" }; return "clipping" }
   func saveSnapshot(completion: @escaping (Bool, String) -> Void) { guard let latestImage, let cg = ciContext.createCGImage(latestImage, from: latestImage.extent) else { completion(false, "No camera frame is available."); return }; PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in guard status == .authorized || status == .limited else { completion(false, "Photo access was not granted."); return }; PHPhotoLibrary.shared().performChanges({ PHAssetChangeRequest.creationRequestForAsset(from: UIImage(cgImage: cg)) }) { success, error in completion(success, success ? "Saved" : (error?.localizedDescription ?? "Could not save snapshot.")) } } }
+
+  func saveVideoToPhotos(path: String, completion: @escaping (Bool, String) -> Void) {
+    let url = URL(fileURLWithPath: path)
+    guard FileManager.default.fileExists(atPath: url.path) else {
+      completion(false, "The amplified video file is no longer available.")
+      return
+    }
+    PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+      guard status == .authorized || status == .limited else {
+        completion(false, "Photo access was not granted.")
+        return
+      }
+      PHPhotoLibrary.shared().performChanges({
+        PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+      }) { success, error in
+        completion(success, success ? "Saved" : (error?.localizedDescription ?? "Could not save amplified video."))
+      }
+    }
+  }
+}
+
+struct RecordingResult {
+  let url: URL
+  let durationSeconds: Double
+  let frameCount: Int
+}
+
+final class AmplifiedVideoRecorder {
+  private let writer: AVAssetWriter
+  private let input: AVAssetWriterInput
+  private let adaptor: AVAssetWriterInputPixelBufferAdaptor
+  private let ciContext: CIContext
+  private let outputURL: URL
+  private var firstTimestamp: CMTime?
+  private var lastTimestamp: CMTime?
+  private(set) var frameCount = 0
+  private var finished = false
+
+  init(outputURL: URL, width: Int, height: Int, expectedFPS: Double, ciContext: CIContext) throws {
+    guard width > 0, height > 0 else {
+      throw EngineError.configuration("The camera produced an invalid video size.")
+    }
+    self.outputURL = outputURL
+    self.ciContext = ciContext
+    try? FileManager.default.removeItem(at: outputURL)
+    writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
+    let pixelCount = Double(width * height)
+    let bitRate = Int(max(4_000_000, min(24_000_000, pixelCount * max(24, expectedFPS) * 0.10)))
+    let settings: [String: Any] = [
+      AVVideoCodecKey: AVVideoCodecType.h264,
+      AVVideoWidthKey: width,
+      AVVideoHeightKey: height,
+      AVVideoCompressionPropertiesKey: [
+        AVVideoAverageBitRateKey: bitRate,
+        AVVideoExpectedSourceFrameRateKey: Int(expectedFPS.rounded()),
+        AVVideoMaxKeyFrameIntervalKey: max(1, Int(expectedFPS.rounded() * 2)),
+        AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
+      ],
+    ]
+    input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
+    input.expectsMediaDataInRealTime = true
+    let attributes: [String: Any] = [
+      kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+      kCVPixelBufferWidthKey as String: width,
+      kCVPixelBufferHeightKey as String: height,
+      kCVPixelBufferMetalCompatibilityKey as String: true,
+      kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+    ]
+    adaptor = AVAssetWriterInputPixelBufferAdaptor(
+      assetWriterInput: input,
+      sourcePixelBufferAttributes: attributes
+    )
+    guard writer.canAdd(input) else {
+      throw EngineError.configuration("The iPhone could not create an H.264 video writer.")
+    }
+    writer.add(input)
+  }
+
+  func append(image: CIImage, timestamp: CMTime) throws {
+    guard !finished else { return }
+    guard timestamp.isValid, timestamp.isNumeric else { return }
+    if writer.status == .unknown {
+      guard writer.startWriting() else {
+        throw writer.error ?? EngineError.configuration("Could not start amplified video recording.")
+      }
+      writer.startSession(atSourceTime: timestamp)
+      firstTimestamp = timestamp
+    }
+    if writer.status == .failed {
+      throw writer.error ?? EngineError.configuration("Amplified video recording failed.")
+    }
+    guard input.isReadyForMoreMediaData else { return }
+    guard let pool = adaptor.pixelBufferPool else {
+      throw EngineError.configuration("The video encoder did not provide a pixel buffer pool.")
+    }
+    var pixelBuffer: CVPixelBuffer?
+    guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pixelBuffer) == kCVReturnSuccess,
+          let pixelBuffer else {
+      throw EngineError.configuration("Could not allocate an amplified video frame.")
+    }
+    let bounds = CGRect(
+      x: 0,
+      y: 0,
+      width: CVPixelBufferGetWidth(pixelBuffer),
+      height: CVPixelBufferGetHeight(pixelBuffer)
+    )
+    ciContext.render(image, to: pixelBuffer, bounds: bounds, colorSpace: CGColorSpaceCreateDeviceRGB())
+    guard adaptor.append(pixelBuffer, withPresentationTime: timestamp) else {
+      throw writer.error ?? EngineError.configuration("Could not encode an amplified video frame.")
+    }
+    frameCount += 1
+    lastTimestamp = timestamp
+  }
+
+  func finish(completion: @escaping (Result<RecordingResult, Error>) -> Void) {
+    guard !finished else {
+      completion(.failure(EngineError.configuration("The video recording was already finalized.")))
+      return
+    }
+    finished = true
+    guard frameCount > 0, writer.status == .writing else {
+      cancel()
+      completion(.failure(EngineError.configuration("No amplified video frames were encoded.")))
+      return
+    }
+    input.markAsFinished()
+    writer.finishWriting { [writer, outputURL, firstTimestamp, lastTimestamp, frameCount] in
+      if writer.status == .completed {
+        let duration = if let firstTimestamp, let lastTimestamp {
+          max(0, lastTimestamp.seconds - firstTimestamp.seconds)
+        } else { 0 }
+        completion(.success(RecordingResult(url: outputURL, durationSeconds: duration, frameCount: frameCount)))
+      } else {
+        completion(.failure(writer.error ?? EngineError.configuration("Could not finalize the amplified video.")))
+      }
+    }
+  }
+
+  func cancel() {
+    if writer.status == .writing || writer.status == .unknown { writer.cancelWriting() }
+    try? FileManager.default.removeItem(at: outputURL)
+  }
 }
 
 private struct FilterUniforms { var dt, lowerHz, upperHz, gain: Float; var reset, luminanceOnly: UInt32 }

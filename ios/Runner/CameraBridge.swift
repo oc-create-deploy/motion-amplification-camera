@@ -19,7 +19,20 @@ final class CameraBridge: NSObject, FlutterStreamHandler {
       switch call.method {
       case "configure": try engine.configure(args); result(nil)
       case "start": try engine.startAnalysis(); result(nil)
-      case "stop": engine.stopAnalysis(); result(nil)
+      case "stop":
+        engine.stopAnalysis { outcome in
+          switch outcome {
+          case .success(let recording):
+            result([
+              "path": recording.url.path,
+              "durationSeconds": recording.durationSeconds,
+              "frameCount": recording.frameCount,
+            ])
+          case .failure(let error):
+            result(FlutterError(code: "recording", message: error.localizedDescription, details: nil))
+          }
+        }
+      case "cancel": engine.cancelAnalysis(); result(nil)
       case "setROI": engine.setROI(args); result(nil)
       case "resetROI": engine.resetROI(); result(nil)
       case "setLock": try engine.setLock(kind: args["kind"] as? String ?? "", locked: args["locked"] as? Bool ?? false); result(nil)
@@ -30,6 +43,17 @@ final class CameraBridge: NSObject, FlutterStreamHandler {
           else { result(FlutterError(code: "snapshot", message: message, details: nil)) }
         }
       }
+      case "saveVideoToPhotos":
+        guard let path = args["path"] as? String, !path.isEmpty else {
+          result(FlutterError(code: "video", message: "No amplified video is available.", details: nil))
+          return
+        }
+        engine.saveVideoToPhotos(path: path) { saved, message in
+          DispatchQueue.main.async {
+            if saved { result(message) }
+            else { result(FlutterError(code: "video", message: message, details: nil)) }
+          }
+        }
       default: result(FlutterMethodNotImplemented)
       }
     } catch { result(FlutterError(code: "camera", message: error.localizedDescription, details: nil)) }

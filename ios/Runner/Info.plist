@@ -13,7 +13,7 @@
   <key>LSRequiresIPhoneOS</key><true/>
   <key>ITSAppUsesNonExemptEncryption</key><false/>
   <key>NSCameraUsageDescription</key><string>Camera access is required to visualize motion and measure translation inside your selected region.</string>
-  <key>NSPhotoLibraryAddUsageDescription</key><string>Photo access lets you save a processed inspection snapshot when you request it.</string>
+  <key>NSPhotoLibraryAddUsageDescription</key><string>Photo access lets you save processed inspection snapshots and amplified videos when you request it.</string>
   <key>CADisableMinimumFrameDurationOnPhone</key><true/>
   <key>UIApplicationSceneManifest</key><dict>
     <key>UIApplicationSupportsMultipleScenes</key><false/>

@@ -11,8 +11,8 @@ An iPhone-only Flutter application that visualizes subtle periodic structural mo
 - Start/stop analysis, touch-drag ROI, gain/band controls, luma/color modes, three processing quality settings, torch, and focus/exposure/white-balance locks.
 - ROI translation in pixels, RMS/peak displacement, dominant frequency, confidence, compact history chart, and explicit warnings.
 - Known-length calibration stored locally; millimeters never appear unless calibration is valid.
-- Session summary and user-initiated CSV export through the iOS share sheet.
-- Processed still snapshots saved to Photos after permission. Processed video recording is **not implemented** in v1; it remains a future item rather than a simulated control.
+- Every analysis session records the actual motion-amplified output frames to a timestamped H.264 MP4. The summary can save that video to Photos or share it together with the CSV measurements.
+- Processed still snapshots and amplified videos are saved to Photos only after explicit user action and add-only permission.
 - Safety onboarding, accessibility semantics, Dynamic Type-friendly scrolling, dark industrial theme, privacy/about/limitations content.
 
 ## Architecture
@@ -23,12 +23,13 @@ Flutter Material 3 UI
   └─ UiKitView → MTKView
        └─ Swift MotionCameraEngine
           ├─ AVFoundation capture + real CMSampleBuffer timestamps
-          ├─ Metal spatial smoothing + temporal amplification + display
+          ├─ Metal spatial smoothing + temporal amplification + reliable MTKView display
+          ├─ AVAssetWriter H.264 export of the amplified Metal output
           ├─ Vision ROI translation registration
           └─ Accelerate/vDSP Hann-windowed FFT and statistics
 ```
 
-Full camera frames never cross into Dart. Metal handles the full-frame image path, while Flutter receives compact measurement/status maps. Vision and vDSP operate natively. Camera session work and frame processing use dedicated serial queues.
+Full camera frames never cross into Dart. Metal handles the full-frame image path, while Flutter receives compact measurement/status maps plus the finalized local MP4 path. Vision and vDSP operate natively. Camera session work and frame processing use dedicated serial queues. Camera authorization is requested before capture configuration, and the MTKView delegate draws processed frames on the UI thread rather than acquiring drawables from the capture callback.
 
 ## Algorithm
 
@@ -72,7 +73,7 @@ The app surfaces invalid/out-of-band settings, timestamp discontinuities, droppe
 
 ## Privacy
 
-All processing is local. The app has no login, network service, advertising, analytics, tracking, telemetry, or upload code. It requests camera access and add-only Photos access. Files leave the app only after the user invokes iOS sharing.
+All processing and H.264 encoding are local. The app has no login, network service, advertising, analytics, tracking, telemetry, or upload code. It requests camera access and add-only Photos access. Files leave the app only after the user invokes iOS sharing.
 
 ## Developer setup
 
