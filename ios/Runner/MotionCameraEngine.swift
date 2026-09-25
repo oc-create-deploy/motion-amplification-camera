@@ -3,6 +3,7 @@ import AVFoundation
 import CoreImage
 import MetalKit
 import Photos
+import QuartzCore
 import Vision
 
 enum EngineError: LocalizedError {
@@ -15,6 +16,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   private let session = AVCaptureSession(), sessionQueue = DispatchQueue(label: "camera.session"), processingQueue = DispatchQueue(label: "camera.processing", qos: .userInitiated)
   private let output = AVCaptureVideoDataOutput(), commandQueue: MTLCommandQueue, ciContext: CIContext
   private var camera: AVCaptureDevice?, textureCache: CVMetalTextureCache?, view: MTKView?
+  private weak var previewLayer: CALayer?
   private var pipeline: MTLComputePipelineState?, fastState: MTLTexture?, slowState: MTLTexture?, outputTexture: MTLTexture?
   private var roi = CGRect(x: 0.2, y: 0.25, width: 0.6, height: 0.4)
   private var previousPixelBuffer: CVPixelBuffer?, lastTimestamp: CMTime?, fpsTimes = [Double](), displacement = [(time: Double, x: Double, y: Double)]()
@@ -73,8 +75,12 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   private func applyVideoOrientation(_ orientation: UIDeviceOrientation, to connection: AVCaptureConnection) {
     if #available(iOS 17.0, *) {
       let coordinatedAngle = camera.map {
-        AVCaptureDevice.RotationCoordinator(device: $0, previewLayer: nil)
-          .videoRotationAngleForHorizonLevelCapture
+        // This is a custom Metal preview, so use the coordinator's preview
+        // compensation rather than its capture compensation. On the reported
+        // physical device those angles differ by 180 degrees, which made the
+        // preview appear upside down even though the frame was portrait-sized.
+        AVCaptureDevice.RotationCoordinator(device: $0, previewLayer: previewLayer)
+          .videoRotationAngleForHorizonLevelPreview
       }
       let angle = coordinatedAngle ?? Self.fallbackVideoRotationAngle(for: orientation)
       if connection.isVideoRotationAngleSupported(angle) {
@@ -99,8 +105,8 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     switch orientation {
     case .landscapeLeft: return 0
     case .landscapeRight: return 180
-    case .portraitUpsideDown: return 90
-    default: return 270
+    case .portraitUpsideDown: return 270
+    default: return 90
     }
   }
 
@@ -118,6 +124,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
 
   func attach(view: MTKView) {
     self.view = view
+    previewLayer = view.layer
     view.device = device
     view.colorPixelFormat = .bgra8Unorm
     view.framebufferOnly = false

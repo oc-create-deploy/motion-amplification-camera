@@ -12,11 +12,11 @@ final class MotionCameraEngineTests: XCTestCase {
 
   func testPortraitSoftwareRotationIsUpright() {
     let angle = MotionCameraEngine.fallbackVideoRotationAngle(for: .portrait)
-    XCTAssertEqual(angle, 270)
-    XCTAssertEqual(MotionCameraEngine.exifOrientation(forClockwiseRotationAngle: angle), 8)
+    XCTAssertEqual(angle, 90)
+    XCTAssertEqual(MotionCameraEngine.exifOrientation(forClockwiseRotationAngle: angle), 6)
     XCTAssertEqual(
-      MotionCameraEngine.exifOrientation(forClockwiseRotationAngle: 90),
-      6
+      MotionCameraEngine.fallbackVideoRotationAngle(for: .portraitUpsideDown),
+      270
     )
   }
 
