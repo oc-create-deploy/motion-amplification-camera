@@ -1,7 +1,15 @@
+import Metal
 import XCTest
 @testable import Runner
 
 final class MotionCameraEngineTests: XCTestCase {
+  func testAmplificationPipelineLoads() throws {
+    guard MTLCreateSystemDefaultDevice() != nil else {
+      throw XCTSkip("Metal is unavailable on this test destination")
+    }
+    XCTAssertTrue(MotionCameraEngine().isAmplificationPipelineReadyForTesting)
+  }
+
   func testTimestampCoefficientMatchesReference() {
     let fc = 8.0, dt = 1.0 / 60.0
     let alpha = 1.0 - exp(-2.0 * Double.pi * fc * dt)

@@ -21,20 +21,43 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   private var analyzing = false, needsReset = true, targetFPS = 60.0, measuredFPS = 0.0, lowerHz = 1.0, upperHz = 8.0, gain = 20.0, quality = "balanced", colorMode = "luminance"
   private var latestImage: CIImage?, droppedFrames = 0, frameIndex = 0, frameWidth = 0, registrationAttempts = 0, registrationSuccesses = 0
   private var cameraReady = false, previewActive = false, recordingRequested = false
+  private var renderFailure: String?
   // EXIF orientation applied in Core Image when an AVCapture connection cannot
   // rotate buffers in hardware (observed on current iPhone/iOS combinations).
   private var softwareExifOrientation: Int32 = 1
   private var recorder: AmplifiedVideoRecorder?, recordingURL: URL?, recordingError: String?
   private var recordingStartedAt: CMTime?, recordedDuration = 0.0
   var onStatus: (([String: Any]) -> Void)?
+  var isAmplificationPipelineReadyForTesting: Bool { pipeline != nil }
 
   override init() {
     guard let gpu = MTLCreateSystemDefaultDevice(), let queue = gpu.makeCommandQueue() else { fatalError("Metal is required") }
     device = gpu; commandQueue = queue; ciContext = CIContext(mtlDevice: gpu)
     super.init(); CVMetalTextureCacheCreate(nil, nil, gpu, nil, &textureCache)
-    if let library = try? gpu.makeDefaultLibrary(bundle: .main), let function = library.makeFunction(name: "amplifyLuma") { pipeline = try? gpu.makeComputePipelineState(function: function) }
+    pipeline = Self.makeAmplificationPipeline(device: gpu)
+    if pipeline == nil {
+      renderFailure = "The Metal motion-amplification shader could not be loaded."
+    }
     UIDevice.current.beginGeneratingDeviceOrientationNotifications()
     NotificationCenter.default.addObserver(self, selector: #selector(orientationChanged), name: UIDevice.orientationDidChangeNotification, object: nil)
+  }
+
+  private static func makeAmplificationPipeline(device: MTLDevice) -> MTLComputePipelineState? {
+    // `makeDefaultLibrary(bundle:)` has failed to locate Flutter's compiled
+    // default.metallib on some physical-device/App Store builds. Search both
+    // supported default-library paths before falling back to an embedded copy
+    // of the same kernel so the camera path never silently produces no frames.
+    let bundledLibrary = try? device.makeDefaultLibrary(bundle: .main)
+    let library = bundledLibrary ?? device.makeDefaultLibrary()
+    if let function = library?.makeFunction(name: "amplifyLuma"),
+       let state = try? device.makeComputePipelineState(function: function) {
+      return state
+    }
+    guard let runtimeLibrary = try? device.makeLibrary(source: amplificationKernelSource, options: nil),
+          let function = runtimeLibrary.makeFunction(name: "amplifyLuma") else {
+      return nil
+    }
+    return try? device.makeComputePipelineState(function: function)
   }
 
   deinit { NotificationCenter.default.removeObserver(self); UIDevice.current.endGeneratingDeviceOrientationNotifications() }
@@ -106,7 +129,10 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     camera = found; session.addInput(input)
     let selection = Self.bestFormat(for: found)
     do { try found.lockForConfiguration(); found.activeFormat = selection.format; found.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(selection.fps)); found.activeVideoMaxFrameDuration = found.activeVideoMinFrameDuration; if found.isSmoothAutoFocusSupported { found.isSmoothAutoFocusEnabled = true }; found.unlockForConfiguration(); targetFPS = selection.fps } catch {}
-    output.alwaysDiscardsLateVideoFrames = true; output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+    output.alwaysDiscardsLateVideoFrames = true
+    output.videoSettings = [
+      kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+    ]
     output.setSampleBufferDelegate(self, queue: processingQueue)
     guard session.canAddOutput(output) else {
       session.commitConfiguration()
@@ -132,7 +158,16 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     return candidates.sorted { a, b in
       let aFPS = prefer120 ? (a.1 >= 120 ? 2 : 1) : (abs(a.1 - 60) < 1 ? 2 : (a.1 >= 120 ? 1 : 0))
       let bFPS = prefer120 ? (b.1 >= 120 ? 2 : 1) : (abs(b.1 - 60) < 1 ? 2 : (b.1 >= 120 ? 1 : 0))
-      if aFPS != bFPS { return aFPS > bFPS }; return a.2 * a.3 > b.2 * b.3
+      if aFPS != bFPS { return aFPS > bFPS }
+      // Four full-resolution BGRA textures are resident during processing.
+      // Prefer 1080p instead of the former "largest format wins" rule, which
+      // selected multi-camera 4K formats and exhausted texture memory on an
+      // actual iPhone before the first preview/recording frame was published.
+      let targetPixels: Int32 = prefer120 ? 1280 * 720 : 1920 * 1080
+      let aDistance = abs(a.2 * a.3 - targetPixels)
+      let bDistance = abs(b.2 * b.3 - targetPixels)
+      if aDistance != bDistance { return aDistance < bDistance }
+      return a.2 * a.3 < b.2 * b.3
     }.first.map { ($0.0, $0.1) } ?? (device.activeFormat, 30)
   }
 
@@ -237,21 +272,41 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     fastState = device.makeTexture(descriptor: descriptor); slowState = device.makeTexture(descriptor: descriptor); outputTexture = device.makeTexture(descriptor: descriptor); needsReset = true
   }
   private func render(pixelBuffer: CVPixelBuffer, timestamp: CMTime, dt: Float) {
-    guard let cache = textureCache, let pipeline else { return }
+    guard let cache = textureCache else {
+      publishRawPreview(pixelBuffer: pixelBuffer, warning: "The Metal camera texture cache is unavailable.")
+      return
+    }
+    guard let pipeline else {
+      publishRawPreview(pixelBuffer: pixelBuffer, warning: renderFailure ?? "The amplification shader is unavailable.")
+      return
+    }
     let width = CVPixelBufferGetWidth(pixelBuffer), height = CVPixelBufferGetHeight(pixelBuffer); ensureTextures(width: width, height: height)
-    var cvTexture: CVMetalTexture?; CVMetalTextureCacheCreateTextureFromImage(nil, cache, pixelBuffer, nil, .bgra8Unorm, width, height, 0, &cvTexture)
-    guard let input = cvTexture.flatMap(CVMetalTextureGetTexture), let fastState, let slowState, let rendered = outputTexture, let command = commandQueue.makeCommandBuffer(), let encoder = command.makeComputeCommandEncoder() else { return }
+    var cvTexture: CVMetalTexture?
+    let textureStatus = CVMetalTextureCacheCreateTextureFromImage(nil, cache, pixelBuffer, nil, .bgra8Unorm, width, height, 0, &cvTexture)
+    guard textureStatus == kCVReturnSuccess,
+          let input = cvTexture.flatMap(CVMetalTextureGetTexture),
+          let fastState, let slowState, let rendered = outputTexture,
+          let command = commandQueue.makeCommandBuffer(),
+          let encoder = command.makeComputeCommandEncoder() else {
+      publishRawPreview(pixelBuffer: pixelBuffer, warning: "The camera frame could not be prepared for Metal amplification.")
+      return
+    }
     encoder.setComputePipelineState(pipeline); encoder.setTexture(input, index: 0); encoder.setTexture(fastState, index: 1); encoder.setTexture(slowState, index: 2); encoder.setTexture(rendered, index: 3)
     var params = FilterUniforms(dt: dt, lowerHz: Float(lowerHz), upperHz: Float(upperHz), gain: analyzing ? Float(gain) : 0, reset: needsReset ? 1 : 0, luminanceOnly: colorMode == "luminance" ? 1 : 0)
     encoder.setBytes(&params, length: MemoryLayout<FilterUniforms>.stride, index: 0); let threads = MTLSize(width: 16, height: 16, depth: 1); encoder.dispatchThreads(MTLSize(width: width, height: height, depth: 1), threadsPerThreadgroup: threads); encoder.endEncoding()
     command.commit()
     command.waitUntilCompleted()
     guard command.status == .completed,
-          let rawImage = CIImage(mtlTexture: rendered, options: [.colorSpace: CGColorSpaceCreateDeviceRGB()]) else { return }
+          let rawImage = CIImage(mtlTexture: rendered, options: [.colorSpace: CGColorSpaceCreateDeviceRGB()]) else {
+      publishRawPreview(pixelBuffer: pixelBuffer, warning: command.error?.localizedDescription ?? "Metal amplification could not render this frame.")
+      return
+    }
     let image = softwareExifOrientation == 1
       ? rawImage
       : rawImage.oriented(forExifOrientation: softwareExifOrientation)
     frameWidth = Int(image.extent.width)
+    renderFailure = nil
+    if recordingRequested { recordingError = nil }
     previewActive = true
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
@@ -267,6 +322,23 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       )
     }
     needsReset = false
+  }
+
+  private func publishRawPreview(pixelBuffer: CVPixelBuffer, warning: String) {
+    let rawImage = CIImage(cvPixelBuffer: pixelBuffer)
+    let image = softwareExifOrientation == 1
+      ? rawImage
+      : rawImage.oriented(forExifOrientation: softwareExifOrientation)
+    renderFailure = warning
+    recordingError = recordingRequested ? warning : recordingError
+    frameWidth = Int(image.extent.width)
+    previewActive = true
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      latestImage = image
+      view?.setNeedsDisplay()
+    }
+    if frameIndex % 30 == 0 { emitStatus(warning: warning) }
   }
 
   func draw(in view: MTKView) {
@@ -358,6 +430,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       "quality": warning == nil ? (analyzing ? "good" : "idle") : qualityName(warning!),
     ]
     if let recordingError { status["recordingError"] = recordingError }
+    if let renderFailure, warning == nil { status["warning"] = renderFailure }
     if let warning { status["warning"] = warning }
     onStatus?(status)
   }
@@ -508,6 +581,42 @@ final class AmplifiedVideoRecorder {
 }
 
 private struct FilterUniforms { var dt, lowerHz, upperHz, gain: Float; var reset, luminanceOnly: UInt32 }
+
+private let amplificationKernelSource = #"""
+#include <metal_stdlib>
+using namespace metal;
+
+struct FilterUniforms { float dt, lowerHz, upperHz, gain; uint reset, luminanceOnly; };
+
+kernel void amplifyLuma(texture2d<float, access::read> input [[texture(0)]],
+                        texture2d<float, access::read_write> fastState [[texture(1)]],
+                        texture2d<float, access::read_write> slowState [[texture(2)]],
+                        texture2d<float, access::write> output [[texture(3)]],
+                        constant FilterUniforms &p [[buffer(0)]],
+                        uint2 gid [[thread_position_in_grid]]) {
+  if (gid.x >= input.get_width() || gid.y >= input.get_height()) return;
+  const uint2 maxCoord = uint2(input.get_width() - 1, input.get_height() - 1);
+  float4 original = input.read(gid);
+  float4 spatial = original * 0.5;
+  spatial += input.read(uint2(uint(max(int(gid.x)-1, 0)), gid.y)) * 0.125;
+  spatial += input.read(uint2(min(gid.x+1, maxCoord.x), gid.y)) * 0.125;
+  spatial += input.read(uint2(gid.x, uint(max(int(gid.y)-1, 0)))) * 0.125;
+  spatial += input.read(uint2(gid.x, min(gid.y+1, maxCoord.y))) * 0.125;
+  float luma = dot(spatial.rgb, float3(0.2126, 0.7152, 0.0722));
+  float4 x = p.luminanceOnly != 0 ? float4(luma, luma, luma, original.a) : spatial;
+  float4 fast = p.reset != 0 ? x : fastState.read(gid);
+  float4 slow = p.reset != 0 ? x : slowState.read(gid);
+  if (p.reset == 0 && p.dt > 0) {
+    float fastAlpha = 1.0 - exp(-2.0 * M_PI_F * p.upperHz * p.dt);
+    float slowAlpha = 1.0 - exp(-2.0 * M_PI_F * p.lowerHz * p.dt);
+    fast += fastAlpha * (x - fast);
+    slow += slowAlpha * (x - slow);
+  }
+  fastState.write(fast, gid);
+  slowState.write(slow, gid);
+  output.write(clamp(original + p.gain * (fast - slow), 0.0, 1.0), gid);
+}
+"""#
 
 enum FrequencyEstimator {
   static func dominantFrequency(samples: [Float], timestamps: [Double], lowerHz: Double, upperHz: Double) -> Double {
