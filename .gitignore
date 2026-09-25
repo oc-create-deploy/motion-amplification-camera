@@ -1,0 +1,30 @@
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+build/
+
+# iOS
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/ephemeral/
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Credentials and build artifacts
+*.p12
+*.mobileprovision
+*.p8
+*.ipa
+*.xcarchive
+.env
+.env.*
