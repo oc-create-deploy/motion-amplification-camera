@@ -72,20 +72,47 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
 
   private func applyVideoOrientation(_ orientation: UIDeviceOrientation, to connection: AVCaptureConnection) {
     if #available(iOS 17.0, *) {
-      let angle: CGFloat = orientation == .landscapeLeft ? 0 : (orientation == .landscapeRight ? 180 : 90)
+      let coordinatedAngle = camera.map {
+        AVCaptureDevice.RotationCoordinator(device: $0, previewLayer: nil)
+          .videoRotationAngleForHorizonLevelCapture
+      }
+      let angle = coordinatedAngle ?? Self.fallbackVideoRotationAngle(for: orientation)
       if connection.isVideoRotationAngleSupported(angle) {
         connection.videoRotationAngle = angle
         softwareExifOrientation = 1
       } else {
-        softwareExifOrientation = orientation == .landscapeLeft ? 1 : (orientation == .landscapeRight ? 3 : 6)
+        softwareExifOrientation = Self.exifOrientation(forClockwiseRotationAngle: angle)
       }
     } else {
       if connection.isVideoOrientationSupported {
         if orientation == .landscapeLeft { connection.videoOrientation = .landscapeRight } else if orientation == .landscapeRight { connection.videoOrientation = .landscapeLeft } else { connection.videoOrientation = .portrait }
         softwareExifOrientation = 1
       } else {
-        softwareExifOrientation = orientation == .landscapeLeft ? 1 : (orientation == .landscapeRight ? 3 : 6)
+        softwareExifOrientation = Self.exifOrientation(
+          forClockwiseRotationAngle: Self.fallbackVideoRotationAngle(for: orientation)
+        )
       }
+    }
+  }
+
+  static func fallbackVideoRotationAngle(for orientation: UIDeviceOrientation) -> CGFloat {
+    switch orientation {
+    case .landscapeLeft: return 0
+    case .landscapeRight: return 180
+    case .portraitUpsideDown: return 90
+    default: return 270
+    }
+  }
+
+  static func exifOrientation(forClockwiseRotationAngle angle: CGFloat) -> Int32 {
+    let normalized = (angle.truncatingRemainder(dividingBy: 360) + 360)
+      .truncatingRemainder(dividingBy: 360)
+    let quarterTurn = Int((normalized / 90).rounded()) % 4
+    switch quarterTurn {
+    case 1: return 6
+    case 2: return 3
+    case 3: return 8
+    default: return 1
     }
   }
 
@@ -127,7 +154,10 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       return
     }
     camera = found; session.addInput(input)
-    let selection = Self.bestFormat(for: found)
+    // High frame rate materially increases the usable vibration band. Prefer
+    // a bounded 720p/120 mode when the camera exposes one; `bestFormat` falls
+    // back to a bounded 1080p/60 mode on devices without 120 FPS capture.
+    let selection = Self.bestFormat(for: found, prefer120: true)
     do { try found.lockForConfiguration(); found.activeFormat = selection.format; found.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(selection.fps)); found.activeVideoMaxFrameDuration = found.activeVideoMinFrameDuration; if found.isSmoothAutoFocusSupported { found.isSmoothAutoFocusEnabled = true }; found.unlockForConfiguration(); targetFPS = selection.fps } catch {}
     output.alwaysDiscardsLateVideoFrames = true
     output.videoSettings = [

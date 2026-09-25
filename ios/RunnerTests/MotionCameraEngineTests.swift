@@ -10,6 +10,16 @@ final class MotionCameraEngineTests: XCTestCase {
     XCTAssertTrue(MotionCameraEngine().isAmplificationPipelineReadyForTesting)
   }
 
+  func testPortraitSoftwareRotationIsUpright() {
+    let angle = MotionCameraEngine.fallbackVideoRotationAngle(for: .portrait)
+    XCTAssertEqual(angle, 270)
+    XCTAssertEqual(MotionCameraEngine.exifOrientation(forClockwiseRotationAngle: angle), 8)
+    XCTAssertEqual(
+      MotionCameraEngine.exifOrientation(forClockwiseRotationAngle: 90),
+      6
+    )
+  }
+
   func testTimestampCoefficientMatchesReference() {
     let fc = 8.0, dt = 1.0 / 60.0
     let alpha = 1.0 - exp(-2.0 * Double.pi * fc * dt)
