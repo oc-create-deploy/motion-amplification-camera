@@ -28,7 +28,7 @@ class AboutScreen extends StatelessWidget {
             ),
             _Section(
               'Recording',
-              'Version 1 captures processed snapshots to Photos. Processed video recording is a future item; the app does not present a simulated recording feature.',
+              'Every analysis session records the actual amplified output locally as an H.264 MP4. You can save that video to Photos or share it with the CSV measurements; nothing is uploaded automatically.',
             ),
           ],
         ),

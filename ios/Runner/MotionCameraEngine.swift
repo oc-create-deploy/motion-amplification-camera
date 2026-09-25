@@ -252,9 +252,12 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       ? rawImage
       : rawImage.oriented(forExifOrientation: softwareExifOrientation)
     frameWidth = Int(image.extent.width)
-    latestImage = image
     previewActive = true
-    DispatchQueue.main.async { [weak self] in self?.view?.setNeedsDisplay() }
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      latestImage = image
+      view?.setNeedsDisplay()
+    }
     if recordingRequested && analyzing {
       appendAmplifiedFrame(
         image,
