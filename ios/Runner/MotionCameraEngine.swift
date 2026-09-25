@@ -490,7 +490,7 @@ final class AmplifiedVideoRecorder {
       if writer.status == .completed {
         let duration = if let firstTimestamp, let lastTimestamp {
           max(0, lastTimestamp.seconds - firstTimestamp.seconds)
-        } else { 0 }
+        } else { 0.0 }
         completion(.success(RecordingResult(url: outputURL, durationSeconds: duration, frameCount: frameCount)))
       } else {
         completion(.failure(writer.error ?? EngineError.configuration("Could not finalize the amplified video.")))
