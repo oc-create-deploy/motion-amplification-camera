@@ -8,6 +8,7 @@ An iPhone-only Flutter application that visualizes subtle periodic structural mo
 
 - Live rear-camera preview and on-device motion-amplified output.
 - Best supported format negotiation, preferring a bounded 720p/120 FPS mode and automatically falling back to bounded 1080p/60 FPS when the camera does not support 120 FPS. The UI reports measured—not assumed—FPS.
+- Real-time H.264 export capped at 60 FPS, so 120 FPS analysis footage is not saved as slow motion.
 - Start/stop analysis, touch-drag ROI, gain/band controls, luma/color modes, three processing quality settings, torch, and focus/exposure/white-balance locks.
 - ROI translation in pixels, RMS/peak displacement, dominant frequency, confidence, compact history chart, and explicit warnings.
 - Known-length calibration stored locally; millimeters never appear unless calibration is valid.

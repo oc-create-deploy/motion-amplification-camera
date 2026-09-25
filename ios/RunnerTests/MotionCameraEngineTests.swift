@@ -26,6 +26,17 @@ final class MotionCameraEngineTests: XCTestCase {
     XCTAssertEqual(alpha, 0.566, accuracy: 0.002)
   }
 
+  func testHighSpeedCaptureExportsAtRealTimeSixtyFPS() {
+    var timeline = RealTimeVideoTimeline(maximumOutputFPS: 60)
+    let presentationTimes = (0...120).compactMap { frame in
+      timeline.presentationTime(for: CMTime(value: CMTimeValue(frame), timescale: 120))
+    }
+
+    XCTAssertEqual(presentationTimes.count, 61)
+    XCTAssertEqual(presentationTimes.first?.seconds ?? -1, 0)
+    XCTAssertEqual(presentationTimes.last?.seconds ?? -1, 1, accuracy: 0.000_001)
+  }
+
   func testSyntheticFrequencyDetection() {
     let fps = 60.0, target = 5.0, count = 256
     let times = (0..<count).map { Double($0) / fps }

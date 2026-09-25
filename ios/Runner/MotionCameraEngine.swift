@@ -499,6 +499,7 @@ final class AmplifiedVideoRecorder {
   private let adaptor: AVAssetWriterInputPixelBufferAdaptor
   private let ciContext: CIContext
   private let outputURL: URL
+  private var timeline: RealTimeVideoTimeline
   private var firstTimestamp: CMTime?
   private var lastTimestamp: CMTime?
   private(set) var frameCount = 0
@@ -510,18 +511,24 @@ final class AmplifiedVideoRecorder {
     }
     self.outputURL = outputURL
     self.ciContext = ciContext
+    // High-speed capture is useful for motion analysis, but exported 120 FPS
+    // clips can be treated as slow-motion media by players. Keep analysis at
+    // the camera's full rate while exporting a standard, real-time 60 FPS
+    // timeline. Excess frames are dropped rather than stretching playback.
+    let exportFPS = min(60.0, max(24.0, expectedFPS.rounded()))
+    timeline = RealTimeVideoTimeline(maximumOutputFPS: exportFPS)
     try? FileManager.default.removeItem(at: outputURL)
     writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
     let pixelCount = Double(width * height)
-    let bitRate = Int(max(4_000_000, min(24_000_000, pixelCount * max(24, expectedFPS) * 0.10)))
+    let bitRate = Int(max(4_000_000, min(24_000_000, pixelCount * exportFPS * 0.10)))
     let settings: [String: Any] = [
       AVVideoCodecKey: AVVideoCodecType.h264,
       AVVideoWidthKey: width,
       AVVideoHeightKey: height,
       AVVideoCompressionPropertiesKey: [
         AVVideoAverageBitRateKey: bitRate,
-        AVVideoExpectedSourceFrameRateKey: Int(expectedFPS.rounded()),
-        AVVideoMaxKeyFrameIntervalKey: max(1, Int(expectedFPS.rounded() * 2)),
+        AVVideoExpectedSourceFrameRateKey: Int(exportFPS),
+        AVVideoMaxKeyFrameIntervalKey: max(1, Int(exportFPS * 2)),
         AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
       ],
     ]
@@ -547,12 +554,13 @@ final class AmplifiedVideoRecorder {
   func append(image: CIImage, timestamp: CMTime) throws {
     guard !finished else { return }
     guard timestamp.isValid, timestamp.isNumeric else { return }
+    guard let presentationTime = timeline.presentationTime(for: timestamp) else { return }
     if writer.status == .unknown {
       guard writer.startWriting() else {
         throw writer.error ?? EngineError.configuration("Could not start amplified video recording.")
       }
-      writer.startSession(atSourceTime: timestamp)
-      firstTimestamp = timestamp
+      writer.startSession(atSourceTime: .zero)
+      firstTimestamp = presentationTime
     }
     if writer.status == .failed {
       throw writer.error ?? EngineError.configuration("Amplified video recording failed.")
@@ -573,11 +581,11 @@ final class AmplifiedVideoRecorder {
       height: CVPixelBufferGetHeight(pixelBuffer)
     )
     ciContext.render(image, to: pixelBuffer, bounds: bounds, colorSpace: CGColorSpaceCreateDeviceRGB())
-    guard adaptor.append(pixelBuffer, withPresentationTime: timestamp) else {
+    guard adaptor.append(pixelBuffer, withPresentationTime: presentationTime) else {
       throw writer.error ?? EngineError.configuration("Could not encode an amplified video frame.")
     }
     frameCount += 1
-    lastTimestamp = timestamp
+    lastTimestamp = presentationTime
   }
 
   func finish(completion: @escaping (Result<RecordingResult, Error>) -> Void) {
@@ -607,6 +615,40 @@ final class AmplifiedVideoRecorder {
   func cancel() {
     if writer.status == .writing || writer.status == .unknown { writer.cancelWriting() }
     try? FileManager.default.removeItem(at: outputURL)
+  }
+}
+
+struct RealTimeVideoTimeline {
+  let maximumOutputFPS: Double
+  private var firstSourceTimestamp: CMTime?
+  private var lastPresentationTimestamp: CMTime?
+
+  init(maximumOutputFPS: Double) {
+    self.maximumOutputFPS = max(1, maximumOutputFPS)
+  }
+
+  mutating func presentationTime(for sourceTimestamp: CMTime) -> CMTime? {
+    guard sourceTimestamp.isValid, sourceTimestamp.isNumeric else { return nil }
+    guard let firstSourceTimestamp else {
+      self.firstSourceTimestamp = sourceTimestamp
+      lastPresentationTimestamp = .zero
+      return .zero
+    }
+
+    let elapsed = CMTimeSubtract(sourceTimestamp, firstSourceTimestamp)
+    guard elapsed.isValid, elapsed.isNumeric, CMTimeCompare(elapsed, .zero) > 0 else {
+      return nil
+    }
+    if let lastPresentationTimestamp {
+      let interval = CMTimeSubtract(elapsed, lastPresentationTimestamp)
+      let minimumInterval = CMTime(
+        seconds: 0.9 / maximumOutputFPS,
+        preferredTimescale: 60_000
+      )
+      guard CMTimeCompare(interval, minimumInterval) >= 0 else { return nil }
+    }
+    lastPresentationTimestamp = elapsed
+    return elapsed
   }
 }
 
