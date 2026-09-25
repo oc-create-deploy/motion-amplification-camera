@@ -11,6 +11,14 @@ import UIKit
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     let messenger = engineBridge.applicationRegistrar.messenger()
     CameraBridge.shared.attach(to: messenger)
-    engineBridge.pluginRegistry.registrar(forPlugin: "MotionCamera").register(CameraViewFactory(engine: CameraBridge.shared.engine, messenger: messenger), withId: "motion_amplification/camera_view")
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "MotionCamera") {
+      registrar.register(
+        CameraViewFactory(
+          engine: CameraBridge.shared.engine,
+          messenger: messenger
+        ),
+        withId: "motion_amplification/camera_view"
+      )
+    }
   }
 }
