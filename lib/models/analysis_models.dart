@@ -55,21 +55,22 @@ class AnalysisParameters {
     double? gain,
     ProcessingQuality? quality,
     ColorMode? colorMode,
-  }) => AnalysisParameters(
-    lowerHz: lowerHz ?? this.lowerHz,
-    upperHz: upperHz ?? this.upperHz,
-    gain: gain ?? this.gain,
-    quality: quality ?? this.quality,
-    colorMode: colorMode ?? this.colorMode,
-  );
+  }) =>
+      AnalysisParameters(
+        lowerHz: lowerHz ?? this.lowerHz,
+        upperHz: upperHz ?? this.upperHz,
+        gain: gain ?? this.gain,
+        quality: quality ?? this.quality,
+        colorMode: colorMode ?? this.colorMode,
+      );
 
   Map<String, Object> toMap() => {
-    'lowerHz': lowerHz,
-    'upperHz': upperHz,
-    'gain': gain,
-    'quality': quality.name,
-    'colorMode': colorMode.name,
-  };
+        'lowerHz': lowerHz,
+        'upperHz': upperHz,
+        'gain': gain,
+        'quality': quality.name,
+        'colorMode': colorMode.name,
+      };
 }
 
 class Calibration {
@@ -157,13 +158,13 @@ class SessionResult {
         : '';
     final rmsMm = hasCalibratedDisplacement
         ? calibration!
-              .pixelsToMillimeters(measurement.rmsPixels)
-              .toStringAsFixed(6)
+            .pixelsToMillimeters(measurement.rmsPixels)
+            .toStringAsFixed(6)
         : '';
     final peakMm = hasCalibratedDisplacement
         ? calibration!
-              .pixelsToMillimeters(measurement.peakPixels)
-              .toStringAsFixed(6)
+            .pixelsToMillimeters(measurement.peakPixels)
+            .toStringAsFixed(6)
         : '';
     return 'started_at,duration_s,fps,lower_hz,upper_hz,gain,dominant_hz,rms_px,peak_px,pixels_per_mm,rms_mm,peak_mm,confidence\n'
         '${startedAt.toIso8601String()},${durationSeconds.toStringAsFixed(3)},${measuredFps.toStringAsFixed(3)},${parameters.lowerHz},${parameters.upperHz},${parameters.gain},${measurement.dominantHz.toStringAsFixed(4)},${measurement.rmsPixels.toStringAsFixed(4)},${measurement.peakPixels.toStringAsFixed(4)},$calibrationValue,$rmsMm,$peakMm,${measurement.confidence.toStringAsFixed(3)}\n';

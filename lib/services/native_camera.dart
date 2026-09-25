@@ -20,14 +20,14 @@ class CameraStatus {
   final Measurement measurement;
   final String? warning;
   factory CameraStatus.fromMap(Map<Object?, Object?> map) => CameraStatus(
-    fps: (map['targetFps'] as num?)?.toDouble() ?? 0,
-    measuredFps: (map['measuredFps'] as num?)?.toDouble() ?? 0,
-    frameWidth: (map['frameWidth'] as num?)?.toDouble() ?? 0,
-    torchAvailable: map['torchAvailable'] == true,
-    running: map['running'] == true,
-    warning: map['warning'] as String?,
-    measurement: Measurement.fromMap(map),
-  );
+        fps: (map['targetFps'] as num?)?.toDouble() ?? 0,
+        measuredFps: (map['measuredFps'] as num?)?.toDouble() ?? 0,
+        frameWidth: (map['frameWidth'] as num?)?.toDouble() ?? 0,
+        torchAvailable: map['torchAvailable'] == true,
+        running: map['running'] == true,
+        warning: map['warning'] as String?,
+        measurement: Measurement.fromMap(map),
+      );
 }
 
 class NativeCameraController {

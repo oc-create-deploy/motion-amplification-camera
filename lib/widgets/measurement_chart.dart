@@ -7,15 +7,16 @@ class MeasurementChart extends StatelessWidget {
   final List<Measurement> values;
   @override
   Widget build(BuildContext context) => Semantics(
-    label: 'Recent displacement chart',
-    child: SizedBox(
-      height: 64,
-      width: double.infinity,
-      child: CustomPaint(
-        painter: _ChartPainter(values, Theme.of(context).colorScheme.primary),
-      ),
-    ),
-  );
+        label: 'Recent displacement chart',
+        child: SizedBox(
+          height: 64,
+          width: double.infinity,
+          child: CustomPaint(
+            painter:
+                _ChartPainter(values, Theme.of(context).colorScheme.primary),
+          ),
+        ),
+      );
 }
 
 class _ChartPainter extends CustomPainter {

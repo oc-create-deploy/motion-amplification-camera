@@ -159,8 +159,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Color get qualityColor => status.measurement.state == QualityState.good
       ? Colors.greenAccent
       : status.measurement.state == QualityState.idle
-      ? Colors.white54
-      : Colors.amber;
+          ? Colors.white54
+          : Colors.amber;
   String get displacementUnit => calibration?.isValid == true ? 'mm' : 'px';
   double displacement(double px) =>
       calibration?.isValid == true ? calibration!.pixelsToMillimeters(px) : px;
@@ -169,8 +169,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       context,
       MaterialPageRoute(
         builder: (_) => CalibrationScreen(
-          pixelLength:
-              roi.width *
+          pixelLength: roi.width *
               (status.frameWidth > 0 ? status.frameWidth : viewSize.width),
         ),
       ),
@@ -185,382 +184,394 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: const Text('Motion Amplification'),
-      actions: [
-        IconButton(
-          tooltip: 'About and limitations',
-          onPressed: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const AboutScreen()),
-          ),
-          icon: const Icon(Icons.info_outline),
+        appBar: AppBar(
+          title: const Text('Motion Amplification'),
+          actions: [
+            IconButton(
+              tooltip: 'About and limitations',
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const AboutScreen()),
+              ),
+              icon: const Icon(Icons.info_outline),
+            ),
+          ],
         ),
-      ],
-    ),
-    body: SafeArea(
-      child: LayoutBuilder(
-        builder: (context, bounds) => ListView(
-          children: [
-            AspectRatio(
-              aspectRatio: 4 / 3,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  const ColoredBox(
-                    color: Colors.black,
-                    child: UiKitView(
-                      viewType: 'motion_amplification/camera_view',
-                      creationParamsCodec: StandardMessageCodec(),
-                    ),
-                  ),
-                  LayoutBuilder(
-                    builder: (context, cameraBounds) => GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onPanStart: (d) => dragStart = Offset(
-                        d.localPosition.dx / cameraBounds.maxWidth,
-                        d.localPosition.dy / cameraBounds.maxHeight,
+        body: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, bounds) => ListView(
+              children: [
+                AspectRatio(
+                  aspectRatio: 4 / 3,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      const ColoredBox(
+                        color: Colors.black,
+                        child: UiKitView(
+                          viewType: 'motion_amplification/camera_view',
+                          creationParamsCodec: StandardMessageCodec(),
+                        ),
                       ),
-                      onPanUpdate: (d) {
-                        if (dragStart == null) {
-                          return;
-                        }
-                        final end = Offset(
-                          (d.localPosition.dx / cameraBounds.maxWidth).clamp(
-                            0,
-                            1,
+                      LayoutBuilder(
+                        builder: (context, cameraBounds) => GestureDetector(
+                          behavior: HitTestBehavior.translucent,
+                          onPanStart: (d) => dragStart = Offset(
+                            d.localPosition.dx / cameraBounds.maxWidth,
+                            d.localPosition.dy / cameraBounds.maxHeight,
                           ),
-                          (d.localPosition.dy / cameraBounds.maxHeight).clamp(
-                            0,
-                            1,
+                          onPanUpdate: (d) {
+                            if (dragStart == null) {
+                              return;
+                            }
+                            final end = Offset(
+                              (d.localPosition.dx / cameraBounds.maxWidth)
+                                  .clamp(
+                                0,
+                                1,
+                              ),
+                              (d.localPosition.dy / cameraBounds.maxHeight)
+                                  .clamp(
+                                0,
+                                1,
+                              ),
+                            );
+                            setState(
+                                () => roi = Rect.fromPoints(dragStart!, end));
+                          },
+                          onPanEnd: (_) {
+                            dragStart = null;
+                            if (roi.width > .03 && roi.height > .03) {
+                              camera.setRoi(
+                                roi.left,
+                                roi.top,
+                                roi.width,
+                                roi.height,
+                              );
+                            }
+                          },
+                          child:
+                              CustomPaint(painter: _RoiPainter(roi, analyzing)),
+                        ),
+                      ),
+                      Positioned(
+                        top: 8,
+                        left: 8,
+                        child: _StatusChip(
+                          label: '${status.measuredFps.toStringAsFixed(1)} FPS',
+                          color: status.measuredFps > 0
+                              ? Colors.cyan
+                              : Colors.amber,
+                        ),
+                      ),
+                      Positioned(
+                        top: 8,
+                        right: 8,
+                        child: _StatusChip(
+                          label: status.measurement.state.name,
+                          color: qualityColor,
+                        ),
+                      ),
+                      if (status.warning != null)
+                        Positioned(
+                          left: 8,
+                          right: 8,
+                          bottom: 8,
+                          child: Material(
+                            color: Colors.amber.shade900.withValues(alpha: .92),
+                            borderRadius: BorderRadius.circular(6),
+                            child: Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: Text(
+                                status.warning!,
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
                           ),
-                        );
-                        setState(() => roi = Rect.fromPoints(dragStart!, end));
-                      },
-                      onPanEnd: (_) {
-                        dragStart = null;
-                        if (roi.width > .03 && roi.height > .03) {
-                          camera.setRoi(
-                            roi.left,
-                            roi.top,
-                            roi.width,
-                            roi.height,
-                          );
-                        }
-                      },
-                      child: CustomPaint(painter: _RoiPainter(roi, analyzing)),
-                    ),
+                        ),
+                    ],
                   ),
-                  Positioned(
-                    top: 8,
-                    left: 8,
-                    child: _StatusChip(
-                      label: '${status.measuredFps.toStringAsFixed(1)} FPS',
-                      color: status.measuredFps > 0
-                          ? Colors.cyan
-                          : Colors.amber,
-                    ),
-                  ),
-                  Positioned(
-                    top: 8,
-                    right: 8,
-                    child: _StatusChip(
-                      label: status.measurement.state.name,
-                      color: qualityColor,
-                    ),
-                  ),
-                  if (status.warning != null)
-                    Positioned(
-                      left: 8,
-                      right: 8,
-                      bottom: 8,
-                      child: Material(
-                        color: Colors.amber.shade900.withValues(alpha: .92),
-                        borderRadius: BorderRadius.circular(6),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+                  child: Column(
+                    children: [
+                      Card(
                         child: Padding(
-                          padding: const EdgeInsets.all(8),
-                          child: Text(
-                            status.warning!,
-                            textAlign: TextAlign.center,
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: _Readout(
+                                      'X',
+                                      displacement(status.measurement.xPixels),
+                                      displacementUnit,
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: _Readout(
+                                      'Y',
+                                      displacement(status.measurement.yPixels),
+                                      displacementUnit,
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: _Readout(
+                                      'Dominant',
+                                      status.measurement.dominantHz,
+                                      'Hz',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const Divider(),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: _Readout(
+                                      'RMS',
+                                      displacement(
+                                          status.measurement.rmsPixels),
+                                      displacementUnit,
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: _Readout(
+                                      'Peak',
+                                      displacement(
+                                          status.measurement.peakPixels),
+                                      displacementUnit,
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: _Readout(
+                                      'Confidence',
+                                      status.measurement.confidence * 100,
+                                      '%',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              MeasurementChart(
+                                  values: List.unmodifiable(history)),
+                            ],
                           ),
                         ),
                       ),
-                    ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-              child: Column(
-                children: [
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        children: [
-                          Row(
+                      if (calibration == null)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 8),
+                          child: Row(
                             children: [
+                              Icon(Icons.straighten,
+                                  color: Colors.amber, size: 18),
+                              SizedBox(width: 8),
                               Expanded(
-                                child: _Readout(
-                                  'X',
-                                  displacement(status.measurement.xPixels),
-                                  displacementUnit,
-                                ),
-                              ),
-                              Expanded(
-                                child: _Readout(
-                                  'Y',
-                                  displacement(status.measurement.yPixels),
-                                  displacementUnit,
-                                ),
-                              ),
-                              Expanded(
-                                child: _Readout(
-                                  'Dominant',
-                                  status.measurement.dominantHz,
-                                  'Hz',
+                                child: Text(
+                                  'Uncalibrated — displacement is shown only in pixels.',
                                 ),
                               ),
                             ],
                           ),
-                          const Divider(),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: _Readout(
-                                  'RMS',
-                                  displacement(status.measurement.rmsPixels),
-                                  displacementUnit,
+                        ),
+                      _SliderRow(
+                        label: 'Gain',
+                        value: parameters.gain,
+                        min: 0,
+                        max: 100,
+                        suffix: '×',
+                        onChanged: analyzing
+                            ? null
+                            : (v) => setState(
+                                  () =>
+                                      parameters = parameters.copyWith(gain: v),
                                 ),
-                              ),
-                              Expanded(
-                                child: _Readout(
-                                  'Peak',
-                                  displacement(status.measurement.peakPixels),
-                                  displacementUnit,
-                                ),
-                              ),
-                              Expanded(
-                                child: _Readout(
-                                  'Confidence',
-                                  status.measurement.confidence * 100,
-                                  '%',
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          MeasurementChart(values: List.unmodifiable(history)),
-                        ],
                       ),
-                    ),
-                  ),
-                  if (calibration == null)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 8),
-                      child: Row(
-                        children: [
-                          Icon(Icons.straighten, color: Colors.amber, size: 18),
-                          SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Uncalibrated — displacement is shown only in pixels.',
-                            ),
-                          ),
-                        ],
+                      _SliderRow(
+                        label: 'Low cutoff',
+                        value: parameters.lowerHz,
+                        min: .1,
+                        max: 20,
+                        suffix: ' Hz',
+                        onChanged: analyzing
+                            ? null
+                            : (v) => setState(
+                                  () => parameters =
+                                      parameters.copyWith(lowerHz: v),
+                                ),
                       ),
-                    ),
-                  _SliderRow(
-                    label: 'Gain',
-                    value: parameters.gain,
-                    min: 0,
-                    max: 100,
-                    suffix: '×',
-                    onChanged: analyzing
-                        ? null
-                        : (v) => setState(
-                            () => parameters = parameters.copyWith(gain: v),
-                          ),
-                  ),
-                  _SliderRow(
-                    label: 'Low cutoff',
-                    value: parameters.lowerHz,
-                    min: .1,
-                    max: 20,
-                    suffix: ' Hz',
-                    onChanged: analyzing
-                        ? null
-                        : (v) => setState(
-                            () => parameters = parameters.copyWith(lowerHz: v),
-                          ),
-                  ),
-                  _SliderRow(
-                    label: 'High cutoff',
-                    value: parameters.upperHz,
-                    min: .5,
-                    max:
-                        (status.measuredFps > 4
+                      _SliderRow(
+                        label: 'High cutoff',
+                        value: parameters.upperHz,
+                        min: .5,
+                        max: (status.measuredFps > 4
                                 ? status.measuredFps * .45 - .01
                                 : 26)
                             .clamp(.5, 54)
                             .toDouble(),
-                    suffix: ' Hz',
-                    onChanged: analyzing
-                        ? null
-                        : (v) => setState(
-                            () => parameters = parameters.copyWith(upperHz: v),
-                          ),
-                  ),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: DropdownButtonFormField<ProcessingQuality>(
-                          initialValue: parameters.quality,
-                          decoration: const InputDecoration(
-                            labelText: 'Processing quality',
-                          ),
-                          items: ProcessingQuality.values
-                              .map(
-                                (v) => DropdownMenuItem(
-                                  value: v,
-                                  child: Text(v.name),
+                        suffix: ' Hz',
+                        onChanged: analyzing
+                            ? null
+                            : (v) => setState(
+                                  () => parameters =
+                                      parameters.copyWith(upperHz: v),
                                 ),
-                              )
-                              .toList(),
-                          onChanged: analyzing
-                              ? null
-                              : (v) => setState(
-                                  () => parameters = parameters.copyWith(
-                                    quality: v,
-                                  ),
-                                ),
-                        ),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: SegmentedButton<ColorMode>(
-                          segments: const [
-                            ButtonSegment(
-                              value: ColorMode.luminance,
-                              label: Text('Luma'),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: DropdownButtonFormField<ProcessingQuality>(
+                              initialValue: parameters.quality,
+                              decoration: const InputDecoration(
+                                labelText: 'Processing quality',
+                              ),
+                              items: ProcessingQuality.values
+                                  .map(
+                                    (v) => DropdownMenuItem(
+                                      value: v,
+                                      child: Text(v.name),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: analyzing
+                                  ? null
+                                  : (v) => setState(
+                                        () => parameters = parameters.copyWith(
+                                          quality: v,
+                                        ),
+                                      ),
                             ),
-                            ButtonSegment(
-                              value: ColorMode.color,
-                              label: Text('Color'),
-                            ),
-                          ],
-                          selected: {parameters.colorMode},
-                          onSelectionChanged: analyzing
-                              ? null
-                              : (v) => setState(
-                                  () => parameters = parameters.copyWith(
-                                    colorMode: v.first,
-                                  ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: SegmentedButton<ColorMode>(
+                              segments: const [
+                                ButtonSegment(
+                                  value: ColorMode.luminance,
+                                  label: Text('Luma'),
                                 ),
-                        ),
+                                ButtonSegment(
+                                  value: ColorMode.color,
+                                  label: Text('Color'),
+                                ),
+                              ],
+                              selected: {parameters.colorMode},
+                              onSelectionChanged: analyzing
+                                  ? null
+                                  : (v) => setState(
+                                        () => parameters = parameters.copyWith(
+                                          colorMode: v.first,
+                                        ),
+                                      ),
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    alignment: WrapAlignment.center,
-                    children: [
-                      FilterChip(
-                        label: const Text('Focus lock'),
-                        selected: focusLocked,
-                        onSelected: (v) => _lock('focus', v),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        alignment: WrapAlignment.center,
+                        children: [
+                          FilterChip(
+                            label: const Text('Focus lock'),
+                            selected: focusLocked,
+                            onSelected: (v) => _lock('focus', v),
+                          ),
+                          FilterChip(
+                            label: const Text('Exposure lock'),
+                            selected: exposureLocked,
+                            onSelected: (v) => _lock('exposure', v),
+                          ),
+                          FilterChip(
+                            label: const Text('WB lock'),
+                            selected: whiteBalanceLocked,
+                            onSelected: (v) => _lock('whiteBalance', v),
+                          ),
+                          FilterChip(
+                            label: const Text('Torch'),
+                            selected: torch,
+                            onSelected: status.torchAvailable
+                                ? (v) async {
+                                    await camera.setTorch(v);
+                                    setState(() => torch = v);
+                                  }
+                                : null,
+                          ),
+                        ],
                       ),
-                      FilterChip(
-                        label: const Text('Exposure lock'),
-                        selected: exposureLocked,
-                        onSelected: (v) => _lock('exposure', v),
-                      ),
-                      FilterChip(
-                        label: const Text('WB lock'),
-                        selected: whiteBalanceLocked,
-                        onSelected: (v) => _lock('whiteBalance', v),
-                      ),
-                      FilterChip(
-                        label: const Text('Torch'),
-                        selected: torch,
-                        onSelected: status.torchAvailable
-                            ? (v) async {
-                                await camera.setTorch(v);
-                                setState(() => torch = v);
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () {
+                                setState(
+                                  () => roi =
+                                      const Rect.fromLTWH(.2, .25, .6, .4),
+                                );
+                                camera.resetRoi();
+                              },
+                              icon: const Icon(Icons.center_focus_weak),
+                              label: const Text('Reset ROI'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () => _calibrate(
+                                Size(bounds.maxWidth, bounds.maxWidth * .75),
+                              ),
+                              icon: const Icon(Icons.straighten),
+                              label: const Text('Calibrate'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton.filledTonal(
+                            tooltip: 'Save processed snapshot',
+                            onPressed: () async {
+                              final result = await camera.snapshot();
+                              if (mounted) {
+                                _message(
+                                  result == null
+                                      ? 'Snapshot unavailable.'
+                                      : 'Snapshot saved to Photos.',
+                                );
                               }
-                            : null,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () {
-                            setState(
-                              () => roi = const Rect.fromLTWH(.2, .25, .6, .4),
-                            );
-                            camera.resetRoi();
-                          },
-                          icon: const Icon(Icons.center_focus_weak),
-                          label: const Text('Reset ROI'),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => _calibrate(
-                            Size(bounds.maxWidth, bounds.maxWidth * .75),
+                            },
+                            icon: const Icon(Icons.camera_alt_outlined),
                           ),
-                          icon: const Icon(Icons.straighten),
-                          label: const Text('Calibrate'),
-                        ),
+                        ],
                       ),
-                      const SizedBox(width: 8),
-                      IconButton.filledTonal(
-                        tooltip: 'Save processed snapshot',
-                        onPressed: () async {
-                          final result = await camera.snapshot();
-                          if (mounted) {
-                            _message(
-                              result == null
-                                  ? 'Snapshot unavailable.'
-                                  : 'Snapshot saved to Photos.',
-                            );
-                          }
-                        },
-                        icon: const Icon(Icons.camera_alt_outlined),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 54,
+                        child: FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor:
+                                analyzing ? Colors.orange.shade800 : null,
+                          ),
+                          onPressed: analyzing ? _stop : _start,
+                          icon: Icon(analyzing ? Icons.stop : Icons.play_arrow),
+                          label: Text(
+                            analyzing
+                                ? 'Stop & view summary'
+                                : 'Start analysis',
+                          ),
+                        ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 54,
-                    child: FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: analyzing
-                            ? Colors.orange.shade800
-                            : null,
-                      ),
-                      onPressed: analyzing ? _stop : _start,
-                      icon: Icon(analyzing ? Icons.stop : Icons.play_arrow),
-                      label: Text(
-                        analyzing ? 'Stop & view summary' : 'Start analysis',
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
-      ),
-    ),
-  );
+      );
 }
 
 class _StatusChip extends StatelessWidget {
@@ -569,22 +580,22 @@ class _StatusChip extends StatelessWidget {
   final Color color;
   @override
   Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(
-      color: Colors.black87,
-      border: Border.all(color: color),
-      borderRadius: BorderRadius.circular(5),
-    ),
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: color,
-          fontFeatures: const [FontFeature.tabularFigures()],
+        decoration: BoxDecoration(
+          color: Colors.black87,
+          border: Border.all(color: color),
+          borderRadius: BorderRadius.circular(5),
         ),
-      ),
-    ),
-  );
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ),
+      );
 }
 
 class _Readout extends StatelessWidget {
@@ -593,28 +604,30 @@ class _Readout extends StatelessWidget {
   final double value;
   @override
   Widget build(BuildContext context) => Semantics(
-    label: '$label ${value.toStringAsFixed(2)} $unit',
-    child: Column(
-      children: [
-        Text(
-          label,
-          style: Theme.of(context).textTheme.labelMedium
-              ?.copyWith(color: Colors.white60),
-        ),
-        FittedBox(
-          child: Text(
-            value.toStringAsFixed(2),
-            style: const TextStyle(
-              fontSize: 23,
-              fontWeight: FontWeight.w600,
-              fontFeatures: [FontFeature.tabularFigures()],
+        label: '$label ${value.toStringAsFixed(2)} $unit',
+        child: Column(
+          children: [
+            Text(
+              label,
+              style: Theme.of(context)
+                  .textTheme
+                  .labelMedium
+                  ?.copyWith(color: Colors.white60),
             ),
-          ),
+            FittedBox(
+              child: Text(
+                value.toStringAsFixed(2),
+                style: const TextStyle(
+                  fontSize: 23,
+                  fontWeight: FontWeight.w600,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
+            ),
+            Text(unit, style: Theme.of(context).textTheme.labelSmall),
+          ],
         ),
-        Text(unit, style: Theme.of(context).textTheme.labelSmall),
-      ],
-    ),
-  );
+      );
 }
 
 class _SliderRow extends StatelessWidget {
@@ -712,54 +725,55 @@ class SessionSummaryScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Session summary')),
-    body: ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        _SummaryRow(
-          'Duration',
-          '${result.durationSeconds.toStringAsFixed(1)} s',
+        appBar: AppBar(title: const Text('Session summary')),
+        body: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            _SummaryRow(
+              'Duration',
+              '${result.durationSeconds.toStringAsFixed(1)} s',
+            ),
+            _SummaryRow('Measured FPS', result.measuredFps.toStringAsFixed(2)),
+            _SummaryRow(
+              'Band',
+              '${result.parameters.lowerHz.toStringAsFixed(1)}–${result.parameters.upperHz.toStringAsFixed(1)} Hz',
+            ),
+            _SummaryRow(
+                'Gain', '${result.parameters.gain.toStringAsFixed(1)}×'),
+            _SummaryRow(
+              'Dominant frequency',
+              '${result.measurement.dominantHz.toStringAsFixed(2)} Hz',
+            ),
+            _SummaryRow(
+              'RMS displacement',
+              result.hasCalibratedDisplacement
+                  ? '${result.calibration!.pixelsToMillimeters(result.measurement.rmsPixels).toStringAsFixed(3)} mm'
+                  : '${result.measurement.rmsPixels.toStringAsFixed(3)} px (uncalibrated)',
+            ),
+            _SummaryRow(
+              'Peak displacement',
+              result.hasCalibratedDisplacement
+                  ? '${result.calibration!.pixelsToMillimeters(result.measurement.peakPixels).toStringAsFixed(3)} mm'
+                  : '${result.measurement.peakPixels.toStringAsFixed(3)} px (uncalibrated)',
+            ),
+            _SummaryRow(
+              'Quality',
+              '${result.measurement.state.name}, ${(result.measurement.confidence * 100).toStringAsFixed(0)}% confidence',
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Results are an inspection aid and are not safety-certified or metrology-grade.',
+              style: TextStyle(color: Colors.amber),
+            ),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              onPressed: () => _export(context),
+              icon: const Icon(Icons.ios_share),
+              label: const Text('Export CSV'),
+            ),
+          ],
         ),
-        _SummaryRow('Measured FPS', result.measuredFps.toStringAsFixed(2)),
-        _SummaryRow(
-          'Band',
-          '${result.parameters.lowerHz.toStringAsFixed(1)}–${result.parameters.upperHz.toStringAsFixed(1)} Hz',
-        ),
-        _SummaryRow('Gain', '${result.parameters.gain.toStringAsFixed(1)}×'),
-        _SummaryRow(
-          'Dominant frequency',
-          '${result.measurement.dominantHz.toStringAsFixed(2)} Hz',
-        ),
-        _SummaryRow(
-          'RMS displacement',
-          result.hasCalibratedDisplacement
-              ? '${result.calibration!.pixelsToMillimeters(result.measurement.rmsPixels).toStringAsFixed(3)} mm'
-              : '${result.measurement.rmsPixels.toStringAsFixed(3)} px (uncalibrated)',
-        ),
-        _SummaryRow(
-          'Peak displacement',
-          result.hasCalibratedDisplacement
-              ? '${result.calibration!.pixelsToMillimeters(result.measurement.peakPixels).toStringAsFixed(3)} mm'
-              : '${result.measurement.peakPixels.toStringAsFixed(3)} px (uncalibrated)',
-        ),
-        _SummaryRow(
-          'Quality',
-          '${result.measurement.state.name}, ${(result.measurement.confidence * 100).toStringAsFixed(0)}% confidence',
-        ),
-        const SizedBox(height: 16),
-        const Text(
-          'Results are an inspection aid and are not safety-certified or metrology-grade.',
-          style: TextStyle(color: Colors.amber),
-        ),
-        const SizedBox(height: 20),
-        FilledButton.icon(
-          onPressed: () => _export(context),
-          icon: const Icon(Icons.ios_share),
-          label: const Text('Export CSV'),
-        ),
-      ],
-    ),
-  );
+      );
 }
 
 class _SummaryRow extends StatelessWidget {
@@ -767,21 +781,21 @@ class _SummaryRow extends StatelessWidget {
   final String label, value;
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 10),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: Text(label, style: const TextStyle(color: Colors.white60)),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Text(label, style: const TextStyle(color: Colors.white60)),
+            ),
+            Expanded(
+              child: Text(
+                value,
+                textAlign: TextAlign.end,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
         ),
-        Expanded(
-          child: Text(
-            value,
-            textAlign: TextAlign.end,
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
-        ),
-      ],
-    ),
-  );
+      );
 }

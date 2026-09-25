@@ -17,24 +17,24 @@ class MotionApp extends StatelessWidget {
   final bool showOnboarding;
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'Motion Amplification Camera',
-    debugShowCheckedModeBanner: false,
-    themeMode: ThemeMode.dark,
-    darkTheme: ThemeData(
-      useMaterial3: true,
-      brightness: Brightness.dark,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xff21c8f6),
-        brightness: Brightness.dark,
-        surface: const Color(0xff09131d),
-        error: const Color(0xffffb14a),
-      ),
-      scaffoldBackgroundColor: const Color(0xff050b11),
-      cardTheme: const CardThemeData(color: Color(0xff0d1b27)),
-      sliderTheme: const SliderThemeData(
-        showValueIndicator: ShowValueIndicator.onDrag,
-      ),
-    ),
-    home: showOnboarding ? const OnboardingScreen() : const HomeScreen(),
-  );
+        title: 'Motion Amplification Camera',
+        debugShowCheckedModeBanner: false,
+        themeMode: ThemeMode.dark,
+        darkTheme: ThemeData(
+          useMaterial3: true,
+          brightness: Brightness.dark,
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xff21c8f6),
+            brightness: Brightness.dark,
+            surface: const Color(0xff09131d),
+            error: const Color(0xffffb14a),
+          ),
+          scaffoldBackgroundColor: const Color(0xff050b11),
+          cardTheme: const CardThemeData(color: Color(0xff0d1b27)),
+          sliderTheme: const SliderThemeData(
+            showValueIndicator: ShowValueIndicator.onDrag,
+          ),
+        ),
+        home: showOnboarding ? const OnboardingScreen() : const HomeScreen(),
+      );
 }
