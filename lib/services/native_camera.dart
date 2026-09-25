@@ -15,6 +15,11 @@ class CameraStatus {
     this.running = false,
     this.recording = false,
     this.recordedDuration = 0,
+    this.exposureBias = 0,
+    this.minExposureBias = -2,
+    this.maxExposureBias = 2,
+    this.iso = 0,
+    this.exposureDuration = 0,
     this.measurement = const Measurement(),
     this.warning,
     this.recordingError,
@@ -23,6 +28,8 @@ class CameraStatus {
   final double frameWidth;
   final bool torchAvailable, cameraReady, previewActive, running, recording;
   final double recordedDuration;
+  final double exposureBias, minExposureBias, maxExposureBias;
+  final double iso, exposureDuration;
   final Measurement measurement;
   final String? warning, recordingError;
   factory CameraStatus.fromMap(Map<Object?, Object?> map) => CameraStatus(
@@ -35,6 +42,11 @@ class CameraStatus {
         running: map['running'] == true,
         recording: map['recording'] == true,
         recordedDuration: (map['recordedDuration'] as num?)?.toDouble() ?? 0,
+        exposureBias: (map['exposureBias'] as num?)?.toDouble() ?? 0,
+        minExposureBias: (map['minExposureBias'] as num?)?.toDouble() ?? -2,
+        maxExposureBias: (map['maxExposureBias'] as num?)?.toDouble() ?? 2,
+        iso: (map['iso'] as num?)?.toDouble() ?? 0,
+        exposureDuration: (map['exposureDuration'] as num?)?.toDouble() ?? 0,
         warning: map['warning'] as String?,
         recordingError: map['recordingError'] as String?,
         measurement: Measurement.fromMap(map),
@@ -83,6 +95,8 @@ class NativeCameraController {
   Future<void> cancel() => _methods.invokeMethod('cancel');
   Future<void> setLock(String kind, bool locked) =>
       _methods.invokeMethod('setLock', {'kind': kind, 'locked': locked});
+  Future<void> setExposureBias(double bias) =>
+      _methods.invokeMethod('setExposureBias', {'bias': bias});
   Future<void> setTorch(bool enabled) =>
       _methods.invokeMethod('setTorch', {'enabled': enabled});
   Future<void> setRoi(double left, double top, double width, double height) =>

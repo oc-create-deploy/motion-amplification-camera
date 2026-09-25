@@ -51,6 +51,18 @@ final class MotionCameraEngineTests: XCTestCase {
     XCTAssertEqual(presentationTimes.last?.seconds ?? -1, 1, accuracy: 0.000_001)
   }
 
+  func testRecorderUsesHighFidelityProResWithoutCompressionProperties() {
+    let settings = AmplifiedVideoRecorder.videoSettings(width: 1280, height: 720)
+
+    XCTAssertEqual(
+      settings[AVVideoCodecKey] as? AVVideoCodecType,
+      AVVideoCodecType.proRes4444
+    )
+    XCTAssertNil(settings[AVVideoCompressionPropertiesKey])
+    XCTAssertEqual(AmplifiedVideoRecorder.outputFileType, .mov)
+    XCTAssertEqual(AmplifiedVideoRecorder.outputFileExtension, "mov")
+  }
+
   func testSyntheticFrequencyDetection() {
     let fps = 60.0, target = 5.0, count = 256
     let times = (0..<count).map { Double($0) / fps }

@@ -8,11 +8,11 @@ An iPhone-only Flutter application that visualizes subtle periodic structural mo
 
 - Live rear-camera preview and on-device motion-amplified output.
 - Best supported format negotiation, preferring a bounded 720p/120 FPS mode and automatically falling back to bounded 1080p/60 FPS when the camera does not support 120 FPS. The UI reports measured—not assumed—FPS.
-- Real-time H.264 export capped at 60 FPS, so 120 FPS analysis footage is not saved as slow motion.
-- Start/stop analysis, touch-drag ROI, gain/band controls, luma/color modes, three processing quality settings, torch, and focus/exposure/white-balance locks.
+- Real-time Apple ProRes 4444 MOV export capped at 60 FPS, so 120 FPS analysis footage is not saved as slow motion.
+- Start/stop analysis beside the preview, touch-drag ROI, gain/band controls, luma/color modes, three processing quality settings, torch, exposure compensation, and focus/exposure/white-balance locks.
 - ROI translation in pixels, RMS/peak displacement, dominant frequency, confidence, compact history chart, and explicit warnings.
 - Known-length calibration stored locally; millimeters never appear unless calibration is valid.
-- Every analysis session records the actual motion-amplified output frames to a timestamped H.264 MP4. The summary can save that video to Photos or share it together with the CSV measurements.
+- Every analysis session records the actual motion-amplified output frames to a timestamped ProRes 4444 MOV with no bitrate or inter-frame compression properties. The summary can save that high-fidelity video to Photos or share it together with the CSV measurements.
 - Processed still snapshots and amplified videos are saved to Photos only after explicit user action and add-only permission.
 - Safety onboarding, accessibility semantics, Dynamic Type-friendly scrolling, dark industrial theme, privacy/about/limitations content.
 
@@ -25,12 +25,12 @@ Flutter Material 3 UI
        └─ Swift MotionCameraEngine
           ├─ AVFoundation capture + real CMSampleBuffer timestamps
           ├─ Metal spatial smoothing + temporal amplification + reliable MTKView display
-          ├─ AVAssetWriter H.264 export of the amplified Metal output
+          ├─ AVAssetWriter ProRes 4444 export of the amplified Metal output
           ├─ Vision ROI translation registration
           └─ Accelerate/vDSP Hann-windowed FFT and statistics
 ```
 
-Full camera frames never cross into Dart. Metal handles the full-frame image path, while Flutter receives compact measurement/status maps plus the finalized local MP4 path. Vision and vDSP operate natively. Camera session work and frame processing use dedicated serial queues. Camera authorization is requested before capture configuration, and the MTKView delegate draws processed frames on the UI thread rather than acquiring drawables from the capture callback.
+Full camera frames never cross into Dart. Metal handles the full-frame image path, while Flutter receives compact measurement/status maps plus the finalized local MOV path. Vision and vDSP operate natively. Camera session work and frame processing use dedicated serial queues. Camera authorization is requested before capture configuration, and the MTKView delegate draws processed frames on the UI thread rather than acquiring drawables from the capture callback.
 
 ## Algorithm
 
@@ -74,7 +74,7 @@ The app surfaces invalid/out-of-band settings, timestamp discontinuities, droppe
 
 ## Privacy
 
-All processing and H.264 encoding are local. The app has no login, network service, advertising, analytics, tracking, telemetry, or upload code. It requests camera access and add-only Photos access. Files leave the app only after the user invokes iOS sharing.
+All processing and ProRes encoding are local. The app has no login, network service, advertising, analytics, tracking, telemetry, or upload code. It requests camera access and add-only Photos access. Files leave the app only after the user invokes iOS sharing.
 
 ## Developer setup
 

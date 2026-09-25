@@ -4,6 +4,7 @@ import CoreImage
 import MetalKit
 import Photos
 import QuartzCore
+import UIKit
 import Vision
 
 enum EngineError: LocalizedError {
@@ -242,6 +243,9 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       analyzing = true
       resetFilter(reason: nil)
     }
+    DispatchQueue.main.async {
+      UIApplication.shared.isIdleTimerDisabled = true
+    }
     emitStatus()
   }
 
@@ -250,6 +254,9 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       guard let self else { return }
       analyzing = false
       recordingRequested = false
+      DispatchQueue.main.async {
+        UIApplication.shared.isIdleTimerDisabled = false
+      }
       guard let recorder else {
         let message = recordingError ?? "No amplified frames were recorded. Keep the camera visible and try again."
         recordingError = message
@@ -281,6 +288,9 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       guard let self else { return }
       analyzing = false
       recordingRequested = false
+      DispatchQueue.main.async {
+        UIApplication.shared.isIdleTimerDisabled = false
+      }
       recorder?.cancel()
       recorder = nil
       recordingURL = nil
@@ -319,6 +329,17 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     resetFilter(reason: nil)
   }
   func setLock(kind: String, locked: Bool) throws { guard let camera else { throw EngineError.noCamera }; try camera.lockForConfiguration(); defer { camera.unlockForConfiguration() }; switch kind { case "focus": if camera.isFocusModeSupported(locked ? .locked : .continuousAutoFocus) { camera.focusMode = locked ? .locked : .continuousAutoFocus }; case "exposure": if camera.isExposureModeSupported(locked ? .locked : .continuousAutoExposure) { camera.exposureMode = locked ? .locked : .continuousAutoExposure }; case "whiteBalance": if camera.isWhiteBalanceModeSupported(locked ? .locked : .continuousAutoWhiteBalance) { camera.whiteBalanceMode = locked ? .locked : .continuousAutoWhiteBalance }; default: break } }
+  func setExposureBias(_ bias: Double) throws {
+    guard let camera else { throw EngineError.noCamera }
+    try camera.lockForConfiguration()
+    defer { camera.unlockForConfiguration() }
+    let clamped = min(
+      camera.maxExposureTargetBias,
+      max(camera.minExposureTargetBias, Float(bias))
+    )
+    camera.setExposureTargetBias(clamped, completionHandler: nil)
+    emitStatus()
+  }
   func setTorch(_ enabled: Bool) throws { guard let camera, camera.hasTorch else { throw EngineError.configuration("Torch is not available.") }; try camera.lockForConfiguration(); defer { camera.unlockForConfiguration() }; if enabled { try camera.setTorchModeOn(level: min(AVCaptureDevice.maxAvailableTorchLevel, 0.5)) } else { camera.torchMode = .off } }
   private func resetFilter(reason: String?) { needsReset = true; lastTimestamp = nil; displacement.removeAll(keepingCapacity: true); previousPixelBuffer = nil; registrationAttempts = 0; registrationSuccesses = 0; if let reason { emitStatus(warning: reason) } }
 
@@ -447,7 +468,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     do {
       if recorder == nil {
         let url = FileManager.default.temporaryDirectory
-          .appendingPathComponent("amplified-motion-\(UUID().uuidString).mp4")
+          .appendingPathComponent("amplified-motion-\(UUID().uuidString).mov")
         recorder = try AmplifiedVideoRecorder(
           outputURL: url,
           width: width,
@@ -497,6 +518,11 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       "running": analyzing,
       "recording": recorder != nil && recordingRequested,
       "recordedDuration": recordedDuration,
+      "exposureBias": camera?.exposureTargetBias ?? 0,
+      "minExposureBias": camera?.minExposureTargetBias ?? 0,
+      "maxExposureBias": camera?.maxExposureTargetBias ?? 0,
+      "iso": camera?.iso ?? 0,
+      "exposureDuration": camera?.exposureDuration.seconds ?? 0,
       "x": m.x,
       "y": m.y,
       "rms": m.rms,
@@ -541,6 +567,18 @@ struct RecordingResult {
 }
 
 final class AmplifiedVideoRecorder {
+  static let outputCodec: AVVideoCodecType = .proRes4444
+  static let outputFileType: AVFileType = .mov
+  static let outputFileExtension = "mov"
+
+  static func videoSettings(width: Int, height: Int) -> [String: Any] {
+    [
+      AVVideoCodecKey: outputCodec,
+      AVVideoWidthKey: width,
+      AVVideoHeightKey: height,
+    ]
+  }
+
   private let writer: AVAssetWriter
   private let input: AVAssetWriterInput
   private let adaptor: AVAssetWriterInputPixelBufferAdaptor
@@ -565,20 +603,13 @@ final class AmplifiedVideoRecorder {
     let exportFPS = min(60.0, max(24.0, expectedFPS.rounded()))
     timeline = RealTimeVideoTimeline(maximumOutputFPS: exportFPS)
     try? FileManager.default.removeItem(at: outputURL)
-    writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
-    let pixelCount = Double(width * height)
-    let bitRate = Int(max(4_000_000, min(24_000_000, pixelCount * exportFPS * 0.10)))
-    let settings: [String: Any] = [
-      AVVideoCodecKey: AVVideoCodecType.h264,
-      AVVideoWidthKey: width,
-      AVVideoHeightKey: height,
-      AVVideoCompressionPropertiesKey: [
-        AVVideoAverageBitRateKey: bitRate,
-        AVVideoExpectedSourceFrameRateKey: Int(exportFPS),
-        AVVideoMaxKeyFrameIntervalKey: max(1, Int(exportFPS * 2)),
-        AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
-      ],
-    ]
+    writer = try AVAssetWriter(outputURL: outputURL, fileType: Self.outputFileType)
+    let settings = Self.videoSettings(width: width, height: height)
+    guard writer.canApply(outputSettings: settings, forMediaType: .video) else {
+      throw EngineError.configuration(
+        "Apple ProRes 4444 recording is unavailable on this device."
+      )
+    }
     input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
     input.expectsMediaDataInRealTime = true
     let attributes: [String: Any] = [
@@ -593,7 +624,7 @@ final class AmplifiedVideoRecorder {
       sourcePixelBufferAttributes: attributes
     )
     guard writer.canAdd(input) else {
-      throw EngineError.configuration("The iPhone could not create an H.264 video writer.")
+      throw EngineError.configuration("The iPhone could not create an Apple ProRes video writer.")
     }
     writer.add(input)
   }

@@ -33,6 +33,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       exposureLocked = false,
       whiteBalanceLocked = false,
       torch = false;
+  double exposureBias = 0;
   Rect roi = const Rect.fromLTWH(.2, .25, .6, .4);
   Offset? dragStart;
   DateTime? startedAt;
@@ -91,6 +92,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     setState(() {
       status = next;
+      exposureBias = next.exposureBias;
       if (analyzing) {
         history.add(next.measurement);
         if (history.length > 120) {
@@ -182,6 +184,43 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
     });
   }
+
+  Future<void> _setExposureBias(double value) async {
+    setState(() => exposureBias = value);
+    try {
+      await camera.setExposureBias(value);
+    } on PlatformException catch (error) {
+      _message(error.message ?? 'Could not adjust exposure.');
+    }
+  }
+
+  Widget _analysisButton() => SizedBox(
+        width: double.infinity,
+        height: 54,
+        child: FilledButton.icon(
+          style: FilledButton.styleFrom(
+            backgroundColor: analyzing ? Colors.orange.shade800 : null,
+          ),
+          onPressed: finalizing
+              ? null
+              : analyzing
+                  ? _stop
+                  : _start,
+          icon: finalizing
+              ? const SizedBox.square(
+                  dimension: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Icon(analyzing ? Icons.stop : Icons.play_arrow),
+          label: Text(
+            finalizing
+                ? 'Finalizing amplified video…'
+                : analyzing
+                    ? 'Stop & save results'
+                    : 'Start analysis',
+          ),
+        ),
+      );
 
   Color get qualityColor => status.measurement.state == QualityState.good
       ? Colors.greenAccent
@@ -346,6 +385,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                 ),
                 Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+                  child: _analysisButton(),
+                ),
+                Padding(
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
                   child: Column(
                     children: [
@@ -473,6 +516,61 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                       parameters.copyWith(upperHz: v),
                                 ),
                       ),
+                      Card(
+                        margin: const EdgeInsets.only(top: 4, bottom: 12),
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  const Icon(Icons.exposure, size: 19),
+                                  const SizedBox(width: 8),
+                                  const Expanded(
+                                    child: Text(
+                                      'Exposure compensation',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                  Text(
+                                    '${exposureBias >= 0 ? '+' : ''}${exposureBias.toStringAsFixed(1)} EV',
+                                  ),
+                                ],
+                              ),
+                              Slider(
+                                value: exposureBias
+                                    .clamp(
+                                      status.minExposureBias,
+                                      status.maxExposureBias <=
+                                              status.minExposureBias
+                                          ? status.minExposureBias + .1
+                                          : status.maxExposureBias,
+                                    )
+                                    .toDouble(),
+                                min: status.minExposureBias,
+                                max: status.maxExposureBias <=
+                                        status.minExposureBias
+                                    ? status.minExposureBias + .1
+                                    : status.maxExposureBias,
+                                divisions: 24,
+                                label:
+                                    '${exposureBias >= 0 ? '+' : ''}${exposureBias.toStringAsFixed(1)} EV',
+                                onChanged: _setExposureBias,
+                              ),
+                              Text(
+                                'ISO ${status.iso.toStringAsFixed(0)} · ${status.exposureDuration > 0 ? '1/${(1 / status.exposureDuration).round()} s' : 'Auto shutter'}',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .labelMedium
+                                    ?.copyWith(color: Colors.white60),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                       Row(
                         children: [
                           Expanded(
@@ -598,36 +696,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             icon: const Icon(Icons.camera_alt_outlined),
                           ),
                         ],
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 54,
-                        child: FilledButton.icon(
-                          style: FilledButton.styleFrom(
-                            backgroundColor:
-                                analyzing ? Colors.orange.shade800 : null,
-                          ),
-                          onPressed: finalizing
-                              ? null
-                              : analyzing
-                                  ? _stop
-                                  : _start,
-                          icon: finalizing
-                              ? const SizedBox.square(
-                                  dimension: 20,
-                                  child:
-                                      CircularProgressIndicator(strokeWidth: 2),
-                                )
-                              : Icon(analyzing ? Icons.stop : Icons.play_arrow),
-                          label: Text(
-                            finalizing
-                                ? 'Finalizing amplified video…'
-                                : analyzing
-                                    ? 'Stop & save results'
-                                    : 'Start analysis & recording',
-                          ),
-                        ),
                       ),
                     ],
                   ),
@@ -842,7 +910,7 @@ class SessionSummaryScreen extends StatelessWidget {
             ),
             _SummaryRow(
               'Amplified video',
-              '${video.durationSeconds.toStringAsFixed(1)} s · ${video.frameCount} frames · H.264 MP4',
+              '${video.durationSeconds.toStringAsFixed(1)} s · ${video.frameCount} frames · ProRes 4444 MOV',
             ),
             _SummaryRow('Measured FPS', result.measuredFps.toStringAsFixed(2)),
             _SummaryRow(

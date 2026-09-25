@@ -28,7 +28,7 @@ class AboutScreen extends StatelessWidget {
             ),
             _Section(
               'Recording',
-              'Every analysis session records the actual amplified output locally as an H.264 MP4. You can save that video to Photos or share it with the CSV measurements; nothing is uploaded automatically.',
+              'Every analysis session records the actual amplified output locally as a high-fidelity Apple ProRes 4444 MOV, without bitrate or inter-frame compression settings. You can save that video to Photos or share it with the CSV measurements; nothing is uploaded automatically.',
             ),
           ],
         ),

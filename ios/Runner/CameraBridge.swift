@@ -36,6 +36,9 @@ final class CameraBridge: NSObject, FlutterStreamHandler {
       case "setROI": engine.setROI(args); result(nil)
       case "resetROI": engine.resetROI(); result(nil)
       case "setLock": try engine.setLock(kind: args["kind"] as? String ?? "", locked: args["locked"] as? Bool ?? false); result(nil)
+      case "setExposureBias":
+        try engine.setExposureBias(args["bias"] as? Double ?? 0)
+        result(nil)
       case "setTorch": try engine.setTorch(args["enabled"] as? Bool ?? false); result(nil)
       case "snapshot": engine.saveSnapshot { saved, message in
         DispatchQueue.main.async {
