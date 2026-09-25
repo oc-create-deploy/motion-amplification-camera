@@ -16,7 +16,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   private let output = AVCaptureVideoDataOutput(), commandQueue: MTLCommandQueue, ciContext: CIContext
   private var camera: AVCaptureDevice?, textureCache: CVMetalTextureCache?, view: MTKView?
   private var pipeline: MTLComputePipelineState?, fastState: MTLTexture?, slowState: MTLTexture?, outputTexture: MTLTexture?
-  private var roi = CGRect(x: .2, y: .25, width: .6, height: .4)
+  private var roi = CGRect(x: 0.2, y: 0.25, width: 0.6, height: 0.4)
   private var previousPixelBuffer: CVPixelBuffer?, lastTimestamp: CMTime?, fpsTimes = [Double](), displacement = [(time: Double, x: Double, y: Double)]()
   private var analyzing = false, needsReset = true, targetFPS = 60.0, measuredFPS = 0.0, lowerHz = 1.0, upperHz = 8.0, gain = 20.0, quality = "balanced", colorMode = "luminance"
   private var latestImage: CIImage?, droppedFrames = 0, frameIndex = 0, frameWidth = 0, registrationAttempts = 0, registrationSuccesses = 0
@@ -76,7 +76,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     lowerHz = args["lowerHz"] as? Double ?? 1; upperHz = args["upperHz"] as? Double ?? 8; gain = args["gain"] as? Double ?? 20
     quality = args["quality"] as? String ?? "balanced"; colorMode = args["colorMode"] as? String ?? "luminance"
     let fps = measuredFPS > 0 ? measuredFPS : targetFPS
-    guard lowerHz > 0, upperHz > lowerHz, upperHz < .45 * fps else { throw EngineError.invalidBand("Choose 0 < lower < upper < 0.45 × measured FPS.") }
+    guard lowerHz > 0, upperHz > lowerHz, upperHz < 0.45 * fps else { throw EngineError.invalidBand("Choose 0 < lower < upper < 0.45 × measured FPS.") }
     resetFilter(reason: nil)
     if quality == "performance" { requestHighSpeedIfAvailable() }
   }
@@ -90,10 +90,10 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   }
   func startAnalysis() throws { guard camera != nil else { throw EngineError.noCamera }; analyzing = true; resetFilter(reason: nil); emitStatus() }
   func stopAnalysis() { analyzing = false; emitStatus() }
-  func setROI(_ args: [String: Any]) { roi = CGRect(x: args["left"] as? Double ?? .2, y: args["top"] as? Double ?? .25, width: args["width"] as? Double ?? .6, height: args["height"] as? Double ?? .4).standardized.intersection(CGRect(x: 0, y: 0, width: 1, height: 1)); resetFilter(reason: nil) }
-  func resetROI() { roi = CGRect(x: .2, y: .25, width: .6, height: .4); resetFilter(reason: nil) }
+  func setROI(_ args: [String: Any]) { roi = CGRect(x: args["left"] as? Double ?? 0.2, y: args["top"] as? Double ?? 0.25, width: args["width"] as? Double ?? 0.6, height: args["height"] as? Double ?? 0.4).standardized.intersection(CGRect(x: 0, y: 0, width: 1, height: 1)); resetFilter(reason: nil) }
+  func resetROI() { roi = CGRect(x: 0.2, y: 0.25, width: 0.6, height: 0.4); resetFilter(reason: nil) }
   func setLock(kind: String, locked: Bool) throws { guard let camera else { throw EngineError.noCamera }; try camera.lockForConfiguration(); defer { camera.unlockForConfiguration() }; switch kind { case "focus": if camera.isFocusModeSupported(locked ? .locked : .continuousAutoFocus) { camera.focusMode = locked ? .locked : .continuousAutoFocus }; case "exposure": if camera.isExposureModeSupported(locked ? .locked : .continuousAutoExposure) { camera.exposureMode = locked ? .locked : .continuousAutoExposure }; case "whiteBalance": if camera.isWhiteBalanceModeSupported(locked ? .locked : .continuousAutoWhiteBalance) { camera.whiteBalanceMode = locked ? .locked : .continuousAutoWhiteBalance }; default: break } }
-  func setTorch(_ enabled: Bool) throws { guard let camera, camera.hasTorch else { throw EngineError.configuration("Torch is not available.") }; try camera.lockForConfiguration(); defer { camera.unlockForConfiguration() }; if enabled { try camera.setTorchModeOn(level: min(AVCaptureDevice.maxAvailableTorchLevel, .5)) } else { camera.torchMode = .off } }
+  func setTorch(_ enabled: Bool) throws { guard let camera, camera.hasTorch else { throw EngineError.configuration("Torch is not available.") }; try camera.lockForConfiguration(); defer { camera.unlockForConfiguration() }; if enabled { try camera.setTorchModeOn(level: min(AVCaptureDevice.maxAvailableTorchLevel, 0.5)) } else { camera.torchMode = .off } }
   private func resetFilter(reason: String?) { needsReset = true; lastTimestamp = nil; displacement.removeAll(keepingCapacity: true); previousPixelBuffer = nil; registrationAttempts = 0; registrationSuccesses = 0; if let reason { emitStatus(warning: reason) } }
 
   func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) { droppedFrames += 1 }
@@ -102,8 +102,8 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     frameWidth = CVPixelBufferGetWidth(pixel)
     let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer), seconds = timestamp.seconds
     var dt = lastTimestamp.map { timestamp.seconds - $0.seconds } ?? 0
-    if dt <= 0 || dt > .25 { resetFilter(reason: dt > .25 ? "Frame discontinuity — filter reset." : nil); dt = 0 }
-    lastTimestamp = timestamp; fpsTimes.append(seconds); while fpsTimes.count > 2 && seconds - fpsTimes[0] > 1 { fpsTimes.removeFirst() }; if fpsTimes.count > 1 { measuredFPS = Double(fpsTimes.count - 1) / max(.001, seconds - fpsTimes[0]) }
+    if dt <= 0 || dt > 0.25 { resetFilter(reason: dt > 0.25 ? "Frame discontinuity — filter reset." : nil); dt = 0 }
+    lastTimestamp = timestamp; fpsTimes.append(seconds); while fpsTimes.count > 2 && seconds - fpsTimes[0] > 1 { fpsTimes.removeFirst() }; if fpsTimes.count > 1 { measuredFPS = Double(fpsTimes.count - 1) / max(0.001, seconds - fpsTimes[0]) }
     render(pixelBuffer: pixel, dt: Float(dt)); frameIndex += 1
     let registrationStride = quality == "detail" ? 2 : (quality == "performance" ? 4 : 3)
     if analyzing && frameIndex % registrationStride == 0 { register(pixelBuffer: pixel, timestamp: seconds) }
@@ -144,7 +144,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     let trackingSuccess = registrationAttempts > 0 ? Double(registrationSuccesses) / Double(registrationAttempts) : 0
     let confidence = trackingSuccess * min(1, Double(recent.count) / 60); return (last.x, last.y, sqrt(Double(meanSquare)), peak, frequency, confidence)
   }
-  private func warning(for pixel: CVPixelBuffer) -> String? { if measuredFPS > 0 && upperHz >= .45 * measuredFPS { return "Band exceeds the Nyquist-safe limit for measured FPS." }; if droppedFrames > 3 { droppedFrames = 0; return "Frames dropped — reduce processing quality or improve lighting." }; if let camera, camera.iso > camera.activeFormat.maxISO * .8 { return "Low light — add steady lighting and avoid flicker." }; if let camera, abs(camera.exposureTargetOffset) > 1.5 { return "Exposure clipping risk — adjust lighting or exposure." }; let m = metrics(); if m.peak > 12 { return "Excessive camera/scene motion; stabilize the tripod." }; if m.confidence < .35 && analyzing { return "Low tracking confidence; select a textured ROI." }; return nil }
+  private func warning(for pixel: CVPixelBuffer) -> String? { if measuredFPS > 0 && upperHz >= 0.45 * measuredFPS { return "Band exceeds the Nyquist-safe limit for measured FPS." }; if droppedFrames > 3 { droppedFrames = 0; return "Frames dropped — reduce processing quality or improve lighting." }; if let camera, camera.iso > camera.activeFormat.maxISO * 0.8 { return "Low light — add steady lighting and avoid flicker." }; if let camera, abs(camera.exposureTargetOffset) > 1.5 { return "Exposure clipping risk — adjust lighting or exposure." }; let m = metrics(); if m.peak > 12 { return "Excessive camera/scene motion; stabilize the tripod." }; if m.confidence < 0.35 && analyzing { return "Low tracking confidence; select a textured ROI." }; return nil }
   func emitStatus(warning: String? = nil) { let m = metrics(); var status: [String: Any] = ["targetFps": targetFPS, "measuredFps": measuredFPS, "frameWidth": frameWidth, "torchAvailable": camera?.hasTorch ?? false, "running": analyzing, "x": m.x, "y": m.y, "rms": m.rms, "peak": m.peak, "frequency": m.frequency, "confidence": m.confidence, "timestamp": lastTimestamp?.seconds ?? 0, "quality": warning == nil ? (analyzing ? "good" : "idle") : qualityName(warning!)]; if let warning { status["warning"] = warning }; onStatus?(status) }
   private func qualityName(_ warning: String) -> String { if warning.contains("dropped") { return "droppedFrames" }; if warning.contains("texture") { return "lowTexture" }; if warning.contains("motion") { return "cameraMotion" }; if warning.contains("Band") { return "invalidBand" }; if warning.contains("Low light") { return "lowLight" }; return "clipping" }
   func saveSnapshot(completion: @escaping (Bool, String) -> Void) { guard let latestImage, let cg = ciContext.createCGImage(latestImage, from: latestImage.extent) else { completion(false, "No camera frame is available."); return }; PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in guard status == .authorized || status == .limited else { completion(false, "Photo access was not granted."); return }; PHPhotoLibrary.shared().performChanges({ PHAssetChangeRequest.creationRequestForAsset(from: UIImage(cgImage: cg)) }) { success, error in completion(success, success ? "Saved" : (error?.localizedDescription ?? "Could not save snapshot.")) } } }
