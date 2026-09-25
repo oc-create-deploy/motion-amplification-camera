@@ -12,13 +12,18 @@ enum EngineError: LocalizedError {
 }
 
 final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, MTKViewDelegate {
+  // Flutter embeds MTKView through UiKitView with the drawable presented in
+  // the opposite half-turn from the portrait camera buffer on physical iOS
+  // devices. Keep this correction presentation-only: recorded frames already
+  // have the correct Core Image orientation and must not be rotated again.
+  static let previewDisplayExifOrientation: Int32 = 3
   let device: MTLDevice
   private let session = AVCaptureSession(), sessionQueue = DispatchQueue(label: "camera.session"), processingQueue = DispatchQueue(label: "camera.processing", qos: .userInitiated)
   private let output = AVCaptureVideoDataOutput(), commandQueue: MTLCommandQueue, ciContext: CIContext
   private var camera: AVCaptureDevice?, textureCache: CVMetalTextureCache?, view: MTKView?
   private weak var previewLayer: CALayer?
   private var pipeline: MTLComputePipelineState?, fastState: MTLTexture?, slowState: MTLTexture?, outputTexture: MTLTexture?
-  private var roi = CGRect(x: 0.2, y: 0.25, width: 0.6, height: 0.4)
+  private var roi = CGRect(x: 0.2, y: 0.35, width: 0.6, height: 0.4)
   private var previousPixelBuffer: CVPixelBuffer?, lastTimestamp: CMTime?, fpsTimes = [Double](), displacement = [(time: Double, x: Double, y: Double)]()
   private var analyzing = false, needsReset = true, targetFPS = 60.0, measuredFPS = 0.0, lowerHz = 1.0, upperHz = 8.0, gain = 20.0, quality = "balanced", colorMode = "luminance"
   private var latestImage: CIImage?, droppedFrames = 0, frameIndex = 0, frameWidth = 0, registrationAttempts = 0, registrationSuccesses = 0
@@ -284,8 +289,35 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       emitStatus()
     }
   }
-  func setROI(_ args: [String: Any]) { roi = CGRect(x: args["left"] as? Double ?? 0.2, y: args["top"] as? Double ?? 0.25, width: args["width"] as? Double ?? 0.6, height: args["height"] as? Double ?? 0.4).standardized.intersection(CGRect(x: 0, y: 0, width: 1, height: 1)); resetFilter(reason: nil) }
-  func resetROI() { roi = CGRect(x: 0.2, y: 0.25, width: 0.6, height: 0.4); resetFilter(reason: nil) }
+  static func cameraROI(fromPreviewROI previewROI: CGRect) -> CGRect {
+    let clipped = previewROI.standardized.intersection(
+      CGRect(x: 0, y: 0, width: 1, height: 1)
+    )
+    return CGRect(
+      x: 1 - clipped.maxX,
+      y: 1 - clipped.maxY,
+      width: clipped.width,
+      height: clipped.height
+    )
+  }
+
+  func setROI(_ args: [String: Any]) {
+    roi = Self.cameraROI(
+      fromPreviewROI: CGRect(
+        x: args["left"] as? Double ?? 0.2,
+        y: args["top"] as? Double ?? 0.25,
+        width: args["width"] as? Double ?? 0.6,
+        height: args["height"] as? Double ?? 0.4
+      )
+    )
+    resetFilter(reason: nil)
+  }
+  func resetROI() {
+    roi = Self.cameraROI(
+      fromPreviewROI: CGRect(x: 0.2, y: 0.25, width: 0.6, height: 0.4)
+    )
+    resetFilter(reason: nil)
+  }
   func setLock(kind: String, locked: Bool) throws { guard let camera else { throw EngineError.noCamera }; try camera.lockForConfiguration(); defer { camera.unlockForConfiguration() }; switch kind { case "focus": if camera.isFocusModeSupported(locked ? .locked : .continuousAutoFocus) { camera.focusMode = locked ? .locked : .continuousAutoFocus }; case "exposure": if camera.isExposureModeSupported(locked ? .locked : .continuousAutoExposure) { camera.exposureMode = locked ? .locked : .continuousAutoExposure }; case "whiteBalance": if camera.isWhiteBalanceModeSupported(locked ? .locked : .continuousAutoWhiteBalance) { camera.whiteBalanceMode = locked ? .locked : .continuousAutoWhiteBalance }; default: break } }
   func setTorch(_ enabled: Bool) throws { guard let camera, camera.hasTorch else { throw EngineError.configuration("Torch is not available.") }; try camera.lockForConfiguration(); defer { camera.unlockForConfiguration() }; if enabled { try camera.setTorchModeOn(level: min(AVCaptureDevice.maxAvailableTorchLevel, 0.5)) } else { camera.torchMode = .off } }
   private func resetFilter(reason: String?) { needsReset = true; lastTimestamp = nil; displacement.removeAll(keepingCapacity: true); previousPixelBuffer = nil; registrationAttempts = 0; registrationSuccesses = 0; if let reason { emitStatus(warning: reason) } }
@@ -382,9 +414,17 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     guard let image = latestImage,
           let drawable = view.currentDrawable,
           let command = commandQueue.makeCommandBuffer() else { return }
+    let previewImage = image.oriented(
+      forExifOrientation: Self.previewDisplayExifOrientation
+    )
     let target = CGRect(origin: .zero, size: view.drawableSize)
-    let scale = max(target.width / image.extent.width, target.height / image.extent.height)
-    let scaled = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+    let scale = max(
+      target.width / previewImage.extent.width,
+      target.height / previewImage.extent.height
+    )
+    let scaled = previewImage.transformed(
+      by: CGAffineTransform(scaleX: scale, y: scale)
+    )
     let offset = CGAffineTransform(
       translationX: (target.width - scaled.extent.width) / 2 - scaled.extent.minX,
       y: (target.height - scaled.extent.height) / 2 - scaled.extent.minY

@@ -20,6 +20,20 @@ final class MotionCameraEngineTests: XCTestCase {
     )
   }
 
+  func testUiKitPreviewUsesPresentationOnlyHalfTurn() {
+    XCTAssertEqual(MotionCameraEngine.previewDisplayExifOrientation, 3)
+  }
+
+  func testUiKitPreviewROIRemainsAlignedAfterHalfTurn() {
+    let mapped = MotionCameraEngine.cameraROI(
+      fromPreviewROI: CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.4)
+    )
+    XCTAssertEqual(mapped.origin.x, 0.6, accuracy: 0.000_001)
+    XCTAssertEqual(mapped.origin.y, 0.4, accuracy: 0.000_001)
+    XCTAssertEqual(mapped.width, 0.3, accuracy: 0.000_001)
+    XCTAssertEqual(mapped.height, 0.4, accuracy: 0.000_001)
+  }
+
   func testTimestampCoefficientMatchesReference() {
     let fc = 8.0, dt = 1.0 / 60.0
     let alpha = 1.0 - exp(-2.0 * Double.pi * fc * dt)
