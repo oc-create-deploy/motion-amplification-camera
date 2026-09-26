@@ -12,11 +12,20 @@ import Metal
 /// decoded a second time. This is the mobile-native equivalent of the batch
 /// FFT idea used by classic Eulerian video magnification implementations.
 final class PrecisionFFTProcessor {
-  static let gridLongEdge = 96
+  // A 64-pixel analysis edge is sufficient for the smooth, low-frequency
+  // displacement field while cutting the two frame-major buffers by 56%
+  // compared with build 12. The full-resolution ProRes image is still used
+  // for reconstruction and export.
+  static let gridLongEdge = 64
   // The source recorder emits at most 60 FPS. This upper bound permits the
   // full recommended 150 seconds for a 0.02 Hz band while keeping the two
   // frame-major analysis buffers within a practical mobile memory budget.
   static let maximumFrames = 9_300
+
+  static func estimatedTimelineBytes(frameCount: Int, gridWidth: Int, gridHeight: Int) -> Int {
+    frameCount * gridWidth * gridHeight
+      * (MemoryLayout<UInt8>.stride + MemoryLayout<Float16>.stride)
+  }
 
   private let device: MTLDevice
   private let commandQueue: MTLCommandQueue
@@ -48,27 +57,23 @@ final class PrecisionFFTProcessor {
     DispatchQueue.global(qos: .userInitiated).async {
       do {
         progress(0.01)
-        let analysis = try self.readLuminanceTimeline(
+        // Keep source luma inside this helper so Swift can release it before
+        // full-resolution decode and Metal reconstruction begin.
+        let timeline = try self.makeFilteredTimeline(
           sourceURL: sourceURL,
-          progress: { progress(0.02 + 0.18 * $0) }
-        )
-        let filtered = try PrecisionFFTBandpass.filterPixels(
-          frameMajorLuma: analysis.luma,
-          frameCount: analysis.timestamps.count,
-          pixelCount: analysis.gridWidth * analysis.gridHeight,
-          sampleRate: analysis.sampleRate,
           lowerHz: lowerHz,
           upperHz: upperHz,
-          progress: { progress(0.20 + 0.48 * $0) }
+          readProgress: { progress(0.02 + 0.18 * $0) },
+          filterProgress: { progress(0.20 + 0.48 * $0) }
         )
         try self.renderFilteredVideo(
           sourceURL: sourceURL,
-          filteredFrameMajor: filtered,
-          frameCount: analysis.timestamps.count,
-          gridWidth: analysis.gridWidth,
-          gridHeight: analysis.gridHeight,
+          filteredFrameMajor: timeline.values,
+          frameCount: timeline.frameCount,
+          gridWidth: timeline.gridWidth,
+          gridHeight: timeline.gridHeight,
           gain: gain,
-          expectedFPS: analysis.sampleRate,
+          expectedFPS: timeline.sampleRate,
           progress: { progress(0.68 + 0.31 * $0) },
           completion: { result in
             progress(1)
@@ -87,6 +92,44 @@ final class PrecisionFFTProcessor {
     let gridWidth: Int
     let gridHeight: Int
     let sampleRate: Double
+  }
+
+  private struct FilteredTimeline {
+    let values: [Float16]
+    let frameCount: Int
+    let gridWidth: Int
+    let gridHeight: Int
+    let sampleRate: Double
+  }
+
+  private func makeFilteredTimeline(
+    sourceURL: URL,
+    lowerHz: Double,
+    upperHz: Double,
+    readProgress: (Double) -> Void,
+    filterProgress: (Double) -> Void
+  ) throws -> FilteredTimeline {
+    let analysis = try readLuminanceTimeline(
+      sourceURL: sourceURL,
+      progress: readProgress
+    )
+    let frameCount = analysis.timestamps.count
+    let filtered = try PrecisionFFTBandpass.filterPixels(
+      frameMajorLuma: analysis.luma,
+      frameCount: frameCount,
+      pixelCount: analysis.gridWidth * analysis.gridHeight,
+      sampleRate: analysis.sampleRate,
+      lowerHz: lowerHz,
+      upperHz: upperHz,
+      progress: filterProgress
+    )
+    return FilteredTimeline(
+      values: filtered,
+      frameCount: frameCount,
+      gridWidth: analysis.gridWidth,
+      gridHeight: analysis.gridHeight,
+      sampleRate: analysis.sampleRate
+    )
   }
 
   private func makeReader(url: URL) throws -> (AVAssetReader, AVAssetReaderTrackOutput) {
@@ -153,7 +196,11 @@ final class PrecisionFFTProcessor {
         ) == kCVReturnSuccess else {
           throw EngineError.configuration("Precision FFT could not allocate its analysis buffer.")
         }
-        luma.reserveCapacity(Self.maximumFrames * gridWidth * gridHeight)
+        let duration = AVURLAsset(url: sourceURL).duration.seconds
+        let expectedFrames = duration.isFinite && duration > 0
+          ? min(Self.maximumFrames, max(16, Int(ceil(duration * 60)) + 8))
+          : min(Self.maximumFrames, 1_800)
+        luma.reserveCapacity(expectedFrames * gridWidth * gridHeight)
       }
       guard let scratch else { continue }
       let sourceImage = CIImage(cvPixelBuffer: source)

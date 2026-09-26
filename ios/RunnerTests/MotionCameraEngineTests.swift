@@ -123,6 +123,19 @@ final class MotionCameraEngineTests: XCTestCase {
     XCTAssertGreaterThan(inBandRMS, outOfBandRMS * 8)
   }
 
+  func testPrecisionFFTWorstCaseTimelineStaysMemoryBounded() {
+    let width = 36
+    let height = PrecisionFFTProcessor.gridLongEdge
+    let bytes = PrecisionFFTProcessor.estimatedTimelineBytes(
+      frameCount: PrecisionFFTProcessor.maximumFrames,
+      gridWidth: width,
+      gridHeight: height
+    )
+
+    XCTAssertEqual(PrecisionFFTProcessor.gridLongEdge, 64)
+    XCTAssertLessThan(bytes, 65 * 1_024 * 1_024)
+  }
+
   func testCalibrationConversion() {
     let pixelsPerMillimeter = 12.5
     XCTAssertEqual(25.0 / pixelsPerMillimeter, 2.0, accuracy: 1e-9)

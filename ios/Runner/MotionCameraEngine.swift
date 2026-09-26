@@ -313,16 +313,40 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     source: RecordingResult,
     completion: @escaping (Result<RecordingResult, Error>) -> Void
   ) {
+    processingQueue.async { [weak self] in
+      guard let self else { return }
+      postProcessing = true
+      processingProgress = 0
+      recordedDuration = source.durationSeconds
+      emitStatus()
+
+      // Build 12 decoded and filtered the full recording while the 60/120 FPS
+      // live camera and its full-resolution Metal textures were still active.
+      // Pause capture first so offline processing has a predictable memory and
+      // GPU budget on a physical iPhone.
+      sessionQueue.async { [weak self] in
+        guard let self else { return }
+        if session.isRunning { session.stopRunning() }
+        processingQueue.async { [weak self] in
+          guard let self else { return }
+          cameraReady = false
+          releaseLiveProcessingResources()
+          runPrecisionProcessing(source: source, completion: completion)
+        }
+      }
+    }
+  }
+
+  private func runPrecisionProcessing(
+    source: RecordingResult,
+    completion: @escaping (Result<RecordingResult, Error>) -> Void
+  ) {
     do {
       let processor = try PrecisionFFTProcessor(
         device: device,
         commandQueue: commandQueue,
         ciContext: ciContext
       )
-      postProcessing = true
-      processingProgress = 0
-      recordedDuration = source.durationSeconds
-      emitStatus()
       processor.process(
         sourceURL: source.url,
         lowerHz: lowerHz,
@@ -330,35 +354,72 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
         gain: gain,
         progress: { [weak self] progress in
           guard let self else { return }
-          processingProgress = min(1, max(0, progress))
-          emitStatus()
+          processingQueue.async { [weak self] in
+            guard let self, postProcessing else { return }
+            let bounded = min(1, max(0, progress))
+            // Avoid flooding Flutter with thousands of status maps while the
+            // per-pixel transform runs.
+            if bounded >= 1 || bounded - processingProgress >= 0.01 {
+              processingProgress = bounded
+              emitStatus()
+            }
+          }
         },
         completion: { [weak self] result in
           guard let self else { return }
-          try? FileManager.default.removeItem(at: source.url)
-          postProcessing = false
-          switch result {
-          case .success(let recording):
-            finishRecording(recording, completion: completion)
-          case .failure(let error):
-            DispatchQueue.main.async {
-              UIApplication.shared.isIdleTimerDisabled = false
+          processingQueue.async { [weak self] in
+            guard let self else { return }
+            try? FileManager.default.removeItem(at: source.url)
+            postProcessing = false
+            resumeCaptureAfterPostProcessing()
+            switch result {
+            case .success(let recording):
+              finishRecording(recording, completion: completion)
+            case .failure(let error):
+              DispatchQueue.main.async {
+                UIApplication.shared.isIdleTimerDisabled = false
+              }
+              recordingError = error.localizedDescription
+              emitStatus(warning: error.localizedDescription)
+              DispatchQueue.main.async { completion(.failure(error)) }
             }
-            recordingError = error.localizedDescription
-            emitStatus(warning: error.localizedDescription)
-            DispatchQueue.main.async { completion(.failure(error)) }
           }
         }
       )
     } catch {
       try? FileManager.default.removeItem(at: source.url)
       postProcessing = false
+      resumeCaptureAfterPostProcessing()
       DispatchQueue.main.async {
         UIApplication.shared.isIdleTimerDisabled = false
       }
       recordingError = error.localizedDescription
       emitStatus(warning: error.localizedDescription)
       DispatchQueue.main.async { completion(.failure(error)) }
+    }
+  }
+
+  private func releaseLiveProcessingResources() {
+    fastState = nil
+    slowState = nil
+    outputTexture = nil
+    previousPixelBuffer = nil
+    fpsTimes.removeAll(keepingCapacity: false)
+    displacement.removeAll(keepingCapacity: false)
+    if let textureCache { CVMetalTextureCacheFlush(textureCache, 0) }
+    needsReset = true
+  }
+
+  private func resumeCaptureAfterPostProcessing() {
+    sessionQueue.async { [weak self] in
+      guard let self else { return }
+      if !session.isRunning { session.startRunning() }
+      let isRunning = session.isRunning
+      processingQueue.async { [weak self] in
+        guard let self else { return }
+        cameraReady = isRunning
+        emitStatus(warning: isRunning ? nil : "The camera session did not restart after processing.")
+      }
     }
   }
 
