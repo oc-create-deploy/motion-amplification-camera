@@ -217,9 +217,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ? 'Precision FFT ${((status.processingProgress) * 100).clamp(0, 100).toStringAsFixed(0)}%'
                 : finalizing
                     ? 'Finalizing amplified video…'
-                : analyzing
-                    ? 'Stop & save results'
-                    : 'Start analysis',
+                    : analyzing
+                        ? 'Stop & save results'
+                        : 'Start analysis',
           ),
         ),
       );
@@ -573,7 +573,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                               .recommendedSeconds
                                       ? 'Recommended duration reached.'
                                       : '${(parameters.durationGuidance.recommendedSeconds - status.recordedDuration).ceil()} s until recommended duration.',
-                                  style: Theme.of(context).textTheme.labelMedium,
+                                  style:
+                                      Theme.of(context).textTheme.labelMedium,
                                 ),
                               ],
                             ],
