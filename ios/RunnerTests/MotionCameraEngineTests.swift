@@ -89,6 +89,40 @@ final class MotionCameraEngineTests: XCTestCase {
     XCTAssertEqual(detected, target, accuracy: fps / Double(count))
   }
 
+  func testPrecisionFFTBandpassRetainsSelectedFrequency() throws {
+    let sampleRate = 64.0
+    let frameCount = 256
+    let pixelCount = 2
+    var samples = [UInt8](repeating: 0, count: frameCount * pixelCount)
+    for frame in 0..<frameCount {
+      let time = Double(frame) / sampleRate
+      let inBand = 128 + 80 * sin(2 * Double.pi * 5 * time)
+      let outOfBand = 128 + 80 * sin(2 * Double.pi * 15 * time)
+      samples[frame * pixelCount] = UInt8(clamping: Int(inBand.rounded()))
+      samples[frame * pixelCount + 1] = UInt8(clamping: Int(outOfBand.rounded()))
+    }
+
+    let filtered = try PrecisionFFTBandpass.filterPixels(
+      frameMajorLuma: samples,
+      frameCount: frameCount,
+      pixelCount: pixelCount,
+      sampleRate: sampleRate,
+      lowerHz: 4,
+      upperHz: 6
+    )
+    let inBandRMS = sqrt(
+      (0..<frameCount).map { pow(Double(filtered[$0 * pixelCount]), 2) }.reduce(0, +)
+        / Double(frameCount)
+    )
+    let outOfBandRMS = sqrt(
+      (0..<frameCount).map { pow(Double(filtered[$0 * pixelCount + 1]), 2) }.reduce(0, +)
+        / Double(frameCount)
+    )
+
+    XCTAssertGreaterThan(inBandRMS, 0.1)
+    XCTAssertGreaterThan(inBandRMS, outOfBandRMS * 8)
+  }
+
   func testCalibrationConversion() {
     let pixelsPerMillimeter = 12.5
     XCTAssertEqual(25.0 / pixelsPerMillimeter, 2.0, accuracy: 1e-9)

@@ -10,6 +10,8 @@ void main() {
       'cameraReady': true,
       'previewActive': true,
       'recording': true,
+      'postProcessing': true,
+      'processingProgress': 0.42,
       'recordedDuration': 3.25,
       'exposureBias': 0.7,
       'minExposureBias': -2,
@@ -21,6 +23,8 @@ void main() {
     expect(status.cameraReady, isTrue);
     expect(status.previewActive, isTrue);
     expect(status.recording, isTrue);
+    expect(status.postProcessing, isTrue);
+    expect(status.processingProgress, 0.42);
     expect(status.recordedDuration, 3.25);
     expect(status.exposureBias, 0.7);
     expect(status.minExposureBias, -2);

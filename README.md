@@ -6,13 +6,14 @@ An iPhone-only Flutter application that visualizes subtle periodic structural mo
 
 ## What works in v1
 
-- Live rear-camera preview and on-device motion-amplified output.
+- Live rear-camera preview plus optional whole-recording Precision FFT post-processing.
 - Best supported format negotiation, preferring a bounded 720p/120 FPS mode and automatically falling back to bounded 1080p/60 FPS when the camera does not support 120 FPS. The UI reports measured—not assumed—FPS.
-- Real-time Apple ProRes 4444 MOV export capped at 60 FPS, so 120 FPS analysis footage is not saved as slow motion.
+- Apple ProRes 4444 MOV export capped at 60 FPS, so 120 FPS analysis footage is not saved as slow motion.
 - Start/stop analysis beside the preview, touch-drag ROI, gain/band controls, luma/color modes, three processing quality settings, torch, exposure compensation, and focus/exposure/white-balance locks.
 - ROI translation in pixels, RMS/peak displacement, dominant frequency, confidence, compact history chart, and explicit warnings.
 - Known-length calibration stored locally; millimeters never appear unless calibration is valid.
-- Every analysis session records the actual motion-amplified output frames to a timestamped ProRes 4444 MOV with no bitrate or inter-frame compression properties. The summary can save that high-fidelity video to Photos or share it together with the CSV measurements.
+- Precision FFT mode records an unamplified ProRes source, applies a zero-phase temporal FFT band-pass across the complete recording, and uses the filtered low-resolution signal to warp the full-resolution source into the final ProRes 4444 MOV. Live mode records the real-time Metal output directly.
+- Frequency-aware guidance recommends at least two cycles and preferably three; for 0.02 Hz, that is 100 seconds minimum and 150 seconds recommended.
 - Processed still snapshots and amplified videos are saved to Photos only after explicit user action and add-only permission.
 - Safety onboarding, accessibility semantics, Dynamic Type-friendly scrolling, dark industrial theme, privacy/about/limitations content.
 
@@ -25,7 +26,9 @@ Flutter Material 3 UI
        └─ Swift MotionCameraEngine
           ├─ AVFoundation capture + real CMSampleBuffer timestamps
           ├─ Metal spatial smoothing + temporal amplification + reliable MTKView display
-          ├─ AVAssetWriter ProRes 4444 export of the amplified Metal output
+          ├─ AVAssetWriter ProRes 4444 capture and export
+          ├─ Accelerate/vDSP whole-recording temporal FFT band-pass
+          ├─ Metal full-resolution reconstruction from the spectral motion signal
           ├─ Vision ROI translation registration
           └─ Accelerate/vDSP Hann-windowed FFT and statistics
 ```

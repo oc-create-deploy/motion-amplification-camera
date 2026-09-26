@@ -20,7 +20,7 @@ class AboutScreen extends StatelessWidget {
             ),
             _Section(
               'Algorithm',
-              'The native engine builds a multi-scale Laplacian signal, applies a timestamp-aware temporal band-pass, estimates sub-pixel displacement in the gradient domain, and warps the original frame to visualize motion rather than brightness flicker. Float temporal state preserves very small signals. Vision registration estimates ROI translation; a Hann-windowed vDSP FFT estimates dominant frequency.',
+              'Live mode builds a multi-scale Laplacian signal, applies a timestamp-aware temporal band-pass, estimates sub-pixel displacement in the gradient domain, and warps the original frame. Precision FFT mode records a high-fidelity source, applies a zero-phase temporal FFT band-pass across the complete recording, then reconstructs the amplified ProRes video on-device. Vision registration estimates ROI translation; a Hann-windowed vDSP FFT estimates dominant frequency.',
             ),
             _Section(
               'Limitations',
@@ -28,7 +28,7 @@ class AboutScreen extends StatelessWidget {
             ),
             _Section(
               'Recording',
-              'Every analysis session records the actual amplified output locally as a high-fidelity Apple ProRes 4444 MOV, without bitrate or inter-frame compression settings. You can save that video to Photos or share it with the CSV measurements; nothing is uploaded automatically.',
+              'Precision FFT needs enough time to observe repeated motion: record at least two cycles and preferably three. At 0.02 Hz one cycle is 50 seconds, so 100 seconds is the minimum and 150 seconds is recommended. Output is a high-fidelity Apple ProRes 4444 MOV. You can save it to Photos or share it with the CSV measurements; nothing is uploaded automatically.',
             ),
           ],
         ),

@@ -4,6 +4,41 @@ enum ProcessingQuality { performance, balanced, detail }
 
 enum ColorMode { luminance, color }
 
+enum ProcessingMode { live, precisionFft }
+
+class RecordingDurationGuidance {
+  const RecordingDurationGuidance({
+    required this.minimumSeconds,
+    required this.recommendedSeconds,
+  });
+
+  final int minimumSeconds;
+  final int recommendedSeconds;
+
+  factory RecordingDurationGuidance.forBand({
+    required double lowerHz,
+    required double upperHz,
+  }) {
+    if (!lowerHz.isFinite ||
+        !upperHz.isFinite ||
+        lowerHz <= 0 ||
+        upperHz <= lowerHz) {
+      return const RecordingDurationGuidance(
+        minimumSeconds: 0,
+        recommendedSeconds: 0,
+      );
+    }
+    final bandwidth = upperHz - lowerHz;
+    int wholeSeconds(double value) => (value - 1e-9).ceil();
+    final minimum = wholeSeconds(math.max(2 / lowerHz, 2 / bandwidth));
+    final recommended = wholeSeconds(math.max(3 / lowerHz, 4 / bandwidth));
+    return RecordingDurationGuidance(
+      minimumSeconds: minimum,
+      recommendedSeconds: math.max(minimum, recommended),
+    );
+  }
+}
+
 enum QualityState {
   idle,
   good,
@@ -22,6 +57,7 @@ class AnalysisParameters {
     this.gain = 40.0,
     this.quality = ProcessingQuality.balanced,
     this.colorMode = ColorMode.luminance,
+    this.processingMode = ProcessingMode.precisionFft,
   });
 
   final double lowerHz;
@@ -29,6 +65,13 @@ class AnalysisParameters {
   final double gain;
   final ProcessingQuality quality;
   final ColorMode colorMode;
+  final ProcessingMode processingMode;
+
+  RecordingDurationGuidance get durationGuidance =>
+      RecordingDurationGuidance.forBand(
+        lowerHz: lowerHz,
+        upperHz: upperHz,
+      );
 
   String? validate(double fps) {
     if (!fps.isFinite || fps <= 0) {
@@ -55,6 +98,7 @@ class AnalysisParameters {
     double? gain,
     ProcessingQuality? quality,
     ColorMode? colorMode,
+    ProcessingMode? processingMode,
   }) =>
       AnalysisParameters(
         lowerHz: lowerHz ?? this.lowerHz,
@@ -62,6 +106,7 @@ class AnalysisParameters {
         gain: gain ?? this.gain,
         quality: quality ?? this.quality,
         colorMode: colorMode ?? this.colorMode,
+        processingMode: processingMode ?? this.processingMode,
       );
 
   Map<String, Object> toMap() => {
@@ -70,6 +115,7 @@ class AnalysisParameters {
         'gain': gain,
         'quality': quality.name,
         'colorMode': colorMode.name,
+        'processingMode': processingMode.name,
       };
 }
 

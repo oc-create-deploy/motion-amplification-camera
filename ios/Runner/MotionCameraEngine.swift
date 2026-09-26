@@ -25,7 +25,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   private var pipeline: MTLComputePipelineState?, fastState: MTLTexture?, slowState: MTLTexture?, outputTexture: MTLTexture?
   private var roi = CGRect(x: 0.2, y: 0.35, width: 0.6, height: 0.4)
   private var previousPixelBuffer: CVPixelBuffer?, lastTimestamp: CMTime?, fpsTimes = [Double](), displacement = [(time: Double, x: Double, y: Double)]()
-  private var analyzing = false, needsReset = true, targetFPS = 60.0, measuredFPS = 0.0, lowerHz = 1.0, upperHz = 8.0, gain = 20.0, quality = "balanced", colorMode = "luminance"
+  private var analyzing = false, needsReset = true, targetFPS = 60.0, measuredFPS = 0.0, lowerHz = 1.0, upperHz = 8.0, gain = 20.0, quality = "balanced", colorMode = "luminance", processingMode = "precisionFft"
   private var latestImage: CIImage?, droppedFrames = 0, frameIndex = 0, frameWidth = 0, registrationAttempts = 0, registrationSuccesses = 0
   private var cameraReady = false, previewActive = false, recordingRequested = false
   private var renderFailure: String?
@@ -34,6 +34,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   private var softwareExifOrientation: Int32 = 1
   private var recorder: AmplifiedVideoRecorder?, recordingURL: URL?, recordingError: String?
   private var recordingStartedAt: CMTime?, recordedDuration = 0.0
+  private var postProcessing = false, processingProgress = 0.0
   var onStatus: (([String: Any]) -> Void)?
   var isAmplificationPipelineReadyForTesting: Bool { pipeline != nil }
   static let temporalStatePixelFormatForTesting: MTLPixelFormat = .r32Float
@@ -217,6 +218,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   func configure(_ args: [String: Any]) throws {
     lowerHz = args["lowerHz"] as? Double ?? 1; upperHz = args["upperHz"] as? Double ?? 8; gain = args["gain"] as? Double ?? 20
     quality = args["quality"] as? String ?? "balanced"; colorMode = args["colorMode"] as? String ?? "luminance"
+    processingMode = args["processingMode"] as? String ?? "precisionFft"
     let fps = measuredFPS > 0 ? measuredFPS : targetFPS
     guard lowerHz > 0, upperHz > lowerHz, upperHz < 0.45 * fps else { throw EngineError.invalidBand("Choose 0 < lower < upper < 0.45 × measured FPS.") }
     resetFilter(reason: nil)
@@ -239,6 +241,8 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       recordingError = nil
       recordingStartedAt = nil
       recordedDuration = 0
+      postProcessing = false
+      processingProgress = 0
       recordingRequested = true
       analyzing = true
       resetFilter(reason: nil)
@@ -254,10 +258,10 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       guard let self else { return }
       analyzing = false
       recordingRequested = false
-      DispatchQueue.main.async {
-        UIApplication.shared.isIdleTimerDisabled = false
-      }
       guard let recorder else {
+        DispatchQueue.main.async {
+          UIApplication.shared.isIdleTimerDisabled = false
+        }
         let message = recordingError ?? "No amplified frames were recorded. Keep the camera visible and try again."
         recordingError = message
         emitStatus(warning: message)
@@ -269,12 +273,15 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
         guard let self else { return }
         switch result {
         case .success(let recording):
-          recordingURL = recording.url
-          recordedDuration = recording.durationSeconds
-          recordingError = nil
-          emitStatus()
-          DispatchQueue.main.async { completion(.success(recording)) }
+          if processingMode == "precisionFft" {
+            beginPrecisionProcessing(source: recording, completion: completion)
+          } else {
+            finishRecording(recording, completion: completion)
+          }
         case .failure(let error):
+          DispatchQueue.main.async {
+            UIApplication.shared.isIdleTimerDisabled = false
+          }
           recordingError = error.localizedDescription
           emitStatus(warning: error.localizedDescription)
           DispatchQueue.main.async { completion(.failure(error)) }
@@ -296,8 +303,78 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       recordingURL = nil
       recordingStartedAt = nil
       recordedDuration = 0
+      postProcessing = false
+      processingProgress = 0
       emitStatus()
     }
+  }
+
+  private func beginPrecisionProcessing(
+    source: RecordingResult,
+    completion: @escaping (Result<RecordingResult, Error>) -> Void
+  ) {
+    do {
+      let processor = try PrecisionFFTProcessor(
+        device: device,
+        commandQueue: commandQueue,
+        ciContext: ciContext
+      )
+      postProcessing = true
+      processingProgress = 0
+      recordedDuration = source.durationSeconds
+      emitStatus()
+      processor.process(
+        sourceURL: source.url,
+        lowerHz: lowerHz,
+        upperHz: upperHz,
+        gain: gain,
+        progress: { [weak self] progress in
+          guard let self else { return }
+          processingProgress = min(1, max(0, progress))
+          emitStatus()
+        },
+        completion: { [weak self] result in
+          guard let self else { return }
+          try? FileManager.default.removeItem(at: source.url)
+          postProcessing = false
+          switch result {
+          case .success(let recording):
+            finishRecording(recording, completion: completion)
+          case .failure(let error):
+            DispatchQueue.main.async {
+              UIApplication.shared.isIdleTimerDisabled = false
+            }
+            recordingError = error.localizedDescription
+            emitStatus(warning: error.localizedDescription)
+            DispatchQueue.main.async { completion(.failure(error)) }
+          }
+        }
+      )
+    } catch {
+      try? FileManager.default.removeItem(at: source.url)
+      postProcessing = false
+      DispatchQueue.main.async {
+        UIApplication.shared.isIdleTimerDisabled = false
+      }
+      recordingError = error.localizedDescription
+      emitStatus(warning: error.localizedDescription)
+      DispatchQueue.main.async { completion(.failure(error)) }
+    }
+  }
+
+  private func finishRecording(
+    _ recording: RecordingResult,
+    completion: @escaping (Result<RecordingResult, Error>) -> Void
+  ) {
+    recordingURL = recording.url
+    recordedDuration = recording.durationSeconds
+    recordingError = nil
+    processingProgress = processingMode == "precisionFft" ? 1 : 0
+    DispatchQueue.main.async {
+      UIApplication.shared.isIdleTimerDisabled = false
+    }
+    emitStatus()
+    DispatchQueue.main.async { completion(.success(recording)) }
   }
   static func cameraROI(fromPreviewROI previewROI: CGRect) -> CGRect {
     let clipped = previewROI.standardized.intersection(
@@ -388,11 +465,11 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   }
   private func render(pixelBuffer: CVPixelBuffer, timestamp: CMTime, dt: Float) {
     guard let cache = textureCache else {
-      publishRawPreview(pixelBuffer: pixelBuffer, warning: "The Metal camera texture cache is unavailable.")
+      publishRawPreview(pixelBuffer: pixelBuffer, timestamp: timestamp, warning: "The Metal camera texture cache is unavailable.")
       return
     }
     guard let pipeline else {
-      publishRawPreview(pixelBuffer: pixelBuffer, warning: renderFailure ?? "The amplification shader is unavailable.")
+      publishRawPreview(pixelBuffer: pixelBuffer, timestamp: timestamp, warning: renderFailure ?? "The amplification shader is unavailable.")
       return
     }
     let width = CVPixelBufferGetWidth(pixelBuffer), height = CVPixelBufferGetHeight(pixelBuffer); ensureTextures(width: width, height: height)
@@ -403,7 +480,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
           let fastState, let slowState, let rendered = outputTexture,
           let command = commandQueue.makeCommandBuffer(),
           let encoder = command.makeComputeCommandEncoder() else {
-      publishRawPreview(pixelBuffer: pixelBuffer, warning: "The camera frame could not be prepared for Metal amplification.")
+      publishRawPreview(pixelBuffer: pixelBuffer, timestamp: timestamp, warning: "The camera frame could not be prepared for Metal amplification.")
       return
     }
     encoder.setComputePipelineState(pipeline); encoder.setTexture(input, index: 0); encoder.setTexture(fastState, index: 1); encoder.setTexture(slowState, index: 2); encoder.setTexture(rendered, index: 3)
@@ -413,7 +490,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     command.waitUntilCompleted()
     guard command.status == .completed,
           let rawImage = CIImage(mtlTexture: rendered, options: [.colorSpace: CGColorSpaceCreateDeviceRGB()]) else {
-      publishRawPreview(pixelBuffer: pixelBuffer, warning: command.error?.localizedDescription ?? "Metal amplification could not render this frame.")
+      publishRawPreview(pixelBuffer: pixelBuffer, timestamp: timestamp, warning: command.error?.localizedDescription ?? "Metal amplification could not render this frame.")
       return
     }
     let image = softwareExifOrientation == 1
@@ -429,8 +506,9 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       view?.setNeedsDisplay()
     }
     if recordingRequested && analyzing {
-      appendAmplifiedFrame(
-        image,
+      let sourceImage = orientedSourceImage(pixelBuffer)
+      appendRecordedFrame(
+        processingMode == "precisionFft" ? sourceImage : image,
         timestamp: timestamp,
         width: Int(image.extent.width),
         height: Int(image.extent.height)
@@ -439,11 +517,15 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     needsReset = false
   }
 
-  private func publishRawPreview(pixelBuffer: CVPixelBuffer, warning: String) {
+  private func orientedSourceImage(_ pixelBuffer: CVPixelBuffer) -> CIImage {
     let rawImage = CIImage(cvPixelBuffer: pixelBuffer)
-    let image = softwareExifOrientation == 1
+    return softwareExifOrientation == 1
       ? rawImage
       : rawImage.oriented(forExifOrientation: softwareExifOrientation)
+  }
+
+  private func publishRawPreview(pixelBuffer: CVPixelBuffer, timestamp: CMTime, warning: String) {
+    let image = orientedSourceImage(pixelBuffer)
     renderFailure = warning
     recordingError = recordingRequested ? warning : recordingError
     frameWidth = Int(image.extent.width)
@@ -452,6 +534,15 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       guard let self else { return }
       latestImage = image
       view?.setNeedsDisplay()
+    }
+    if recordingRequested && analyzing && processingMode == "precisionFft" {
+      recordingError = nil
+      appendRecordedFrame(
+        image,
+        timestamp: timestamp,
+        width: Int(image.extent.width),
+        height: Int(image.extent.height)
+      )
     }
     if frameIndex % 30 == 0 { emitStatus(warning: warning) }
   }
@@ -489,11 +580,11 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
 
   func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
-  private func appendAmplifiedFrame(_ image: CIImage, timestamp: CMTime, width: Int, height: Int) {
+  private func appendRecordedFrame(_ image: CIImage, timestamp: CMTime, width: Int, height: Int) {
     do {
       if recorder == nil {
         let url = FileManager.default.temporaryDirectory
-          .appendingPathComponent("amplified-motion-\(UUID().uuidString).mov")
+          .appendingPathComponent("motion-source-\(UUID().uuidString).mov")
         recorder = try AmplifiedVideoRecorder(
           outputURL: url,
           width: width,
@@ -542,6 +633,8 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       "previewActive": previewActive,
       "running": analyzing,
       "recording": recorder != nil && recordingRequested,
+      "postProcessing": postProcessing,
+      "processingProgress": processingProgress,
       "recordedDuration": recordedDuration,
       "exposureBias": camera?.exposureTargetBias ?? 0,
       "minExposureBias": camera?.minExposureTargetBias ?? 0,
@@ -614,13 +707,22 @@ final class AmplifiedVideoRecorder {
   private var lastTimestamp: CMTime?
   private(set) var frameCount = 0
   private var finished = false
+  private let expectsMediaDataInRealTime: Bool
 
-  init(outputURL: URL, width: Int, height: Int, expectedFPS: Double, ciContext: CIContext) throws {
+  init(
+    outputURL: URL,
+    width: Int,
+    height: Int,
+    expectedFPS: Double,
+    ciContext: CIContext,
+    expectsMediaDataInRealTime: Bool = true
+  ) throws {
     guard width > 0, height > 0 else {
       throw EngineError.configuration("The camera produced an invalid video size.")
     }
     self.outputURL = outputURL
     self.ciContext = ciContext
+    self.expectsMediaDataInRealTime = expectsMediaDataInRealTime
     // High-speed capture is useful for motion analysis, but exported 120 FPS
     // clips can be treated as slow-motion media by players. Keep analysis at
     // the camera's full rate while exporting a standard, real-time 60 FPS
@@ -636,7 +738,7 @@ final class AmplifiedVideoRecorder {
       )
     }
     input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
-    input.expectsMediaDataInRealTime = true
+    input.expectsMediaDataInRealTime = expectsMediaDataInRealTime
     let attributes: [String: Any] = [
       kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
       kCVPixelBufferWidthKey as String: width,
@@ -668,7 +770,20 @@ final class AmplifiedVideoRecorder {
     if writer.status == .failed {
       throw writer.error ?? EngineError.configuration("Amplified video recording failed.")
     }
-    guard input.isReadyForMoreMediaData else { return }
+    if !expectsMediaDataInRealTime {
+      let deadline = Date().addingTimeInterval(10)
+      while !input.isReadyForMoreMediaData,
+            writer.status == .writing,
+            Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.002)
+      }
+    }
+    guard input.isReadyForMoreMediaData else {
+      if expectsMediaDataInRealTime { return }
+      throw writer.error ?? EngineError.configuration(
+        "The ProRes writer did not accept a reconstructed frame."
+      )
+    }
     guard let pool = adaptor.pixelBufferPool else {
       throw EngineError.configuration("The video encoder did not provide a pixel buffer pool.")
     }

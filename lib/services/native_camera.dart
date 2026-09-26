@@ -14,6 +14,8 @@ class CameraStatus {
     this.previewActive = false,
     this.running = false,
     this.recording = false,
+    this.postProcessing = false,
+    this.processingProgress = 0,
     this.recordedDuration = 0,
     this.exposureBias = 0,
     this.minExposureBias = -2,
@@ -26,7 +28,13 @@ class CameraStatus {
   });
   final double fps, measuredFps;
   final double frameWidth;
-  final bool torchAvailable, cameraReady, previewActive, running, recording;
+  final bool torchAvailable,
+      cameraReady,
+      previewActive,
+      running,
+      recording,
+      postProcessing;
+  final double processingProgress;
   final double recordedDuration;
   final double exposureBias, minExposureBias, maxExposureBias;
   final double iso, exposureDuration;
@@ -41,6 +49,9 @@ class CameraStatus {
         previewActive: map['previewActive'] == true,
         running: map['running'] == true,
         recording: map['recording'] == true,
+        postProcessing: map['postProcessing'] == true,
+        processingProgress:
+            (map['processingProgress'] as num?)?.toDouble() ?? 0,
         recordedDuration: (map['recordedDuration'] as num?)?.toDouble() ?? 0,
         exposureBias: (map['exposureBias'] as num?)?.toDouble() ?? 0,
         minExposureBias: (map['minExposureBias'] as num?)?.toDouble() ?? -2,

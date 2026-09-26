@@ -213,8 +213,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 )
               : Icon(analyzing ? Icons.stop : Icons.play_arrow),
           label: Text(
-            finalizing
-                ? 'Finalizing amplified video…'
+            finalizing && status.postProcessing
+                ? 'Precision FFT ${((status.processingProgress) * 100).clamp(0, 100).toStringAsFixed(0)}%'
+                : finalizing
+                    ? 'Finalizing amplified video…'
                 : analyzing
                     ? 'Stop & save results'
                     : 'Start analysis',
@@ -492,6 +494,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         min: .02,
                         max: 20,
                         suffix: ' Hz',
+                        decimals: 2,
                         onChanged: analyzing
                             ? null
                             : (v) => setState(
@@ -516,6 +519,97 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                       parameters.copyWith(upperHz: v),
                                 ),
                       ),
+                      Card(
+                        margin: const EdgeInsets.only(top: 6, bottom: 12),
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  const Icon(Icons.timer_outlined, size: 19),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      parameters.processingMode ==
+                                              ProcessingMode.precisionFft
+                                          ? 'Precision FFT recording length'
+                                          : 'Recording length guidance',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Record at least ${parameters.durationGuidance.minimumSeconds} s; '
+                                'for reliable separation near ${parameters.lowerHz.toStringAsFixed(2)} Hz, '
+                                'aim for ${parameters.durationGuidance.recommendedSeconds} s or longer.',
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                'This captures at least 2–3 cycles of the slowest selected motion. '
+                                'A 0.02 Hz cycle lasts 50 seconds.',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(color: Colors.white60),
+                              ),
+                              if (analyzing) ...[
+                                const SizedBox(height: 10),
+                                LinearProgressIndicator(
+                                  value: (status.recordedDuration /
+                                          parameters.durationGuidance
+                                              .recommendedSeconds)
+                                      .clamp(0, 1),
+                                ),
+                                const SizedBox(height: 5),
+                                Text(
+                                  status.recordedDuration >=
+                                          parameters.durationGuidance
+                                              .recommendedSeconds
+                                      ? 'Recommended duration reached.'
+                                      : '${(parameters.durationGuidance.recommendedSeconds - status.recordedDuration).ceil()} s until recommended duration.',
+                                  style: Theme.of(context).textTheme.labelMedium,
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                      DropdownButtonFormField<ProcessingMode>(
+                        initialValue: parameters.processingMode,
+                        decoration: const InputDecoration(
+                          labelText: 'Saved-video processing',
+                          helperText:
+                              'Precision FFT filters the completed recording before export.',
+                        ),
+                        items: const [
+                          DropdownMenuItem(
+                            value: ProcessingMode.precisionFft,
+                            child: Text('Precision FFT (post-process)'),
+                          ),
+                          DropdownMenuItem(
+                            value: ProcessingMode.live,
+                            child: Text('Live temporal filter'),
+                          ),
+                        ],
+                        onChanged: analyzing
+                            ? null
+                            : (value) {
+                                if (value != null) {
+                                  setState(
+                                    () => parameters = parameters.copyWith(
+                                      processingMode: value,
+                                    ),
+                                  );
+                                }
+                              },
+                      ),
+                      const SizedBox(height: 12),
                       Card(
                         margin: const EdgeInsets.only(top: 4, bottom: 12),
                         child: Padding(
@@ -771,9 +865,11 @@ class _SliderRow extends StatelessWidget {
     required this.max,
     required this.suffix,
     required this.onChanged,
+    this.decimals = 1,
   });
   final String label, suffix;
   final double value, min, max;
+  final int decimals;
   final ValueChanged<double>? onChanged;
   @override
   Widget build(BuildContext context) {
@@ -786,14 +882,14 @@ class _SliderRow extends StatelessWidget {
             value: safe,
             min: min,
             max: max <= min ? min + .1 : max,
-            label: '${safe.toStringAsFixed(1)}$suffix',
+            label: '${safe.toStringAsFixed(decimals)}$suffix',
             onChanged: onChanged,
           ),
         ),
         SizedBox(
           width: 66,
           child: Text(
-            '${safe.toStringAsFixed(1)}$suffix',
+            '${safe.toStringAsFixed(decimals)}$suffix',
             textAlign: TextAlign.end,
           ),
         ),
@@ -915,7 +1011,13 @@ class SessionSummaryScreen extends StatelessWidget {
             _SummaryRow('Measured FPS', result.measuredFps.toStringAsFixed(2)),
             _SummaryRow(
               'Band',
-              '${result.parameters.lowerHz.toStringAsFixed(1)}–${result.parameters.upperHz.toStringAsFixed(1)} Hz',
+              '${result.parameters.lowerHz.toStringAsFixed(2)}–${result.parameters.upperHz.toStringAsFixed(2)} Hz',
+            ),
+            _SummaryRow(
+              'Processing',
+              result.parameters.processingMode == ProcessingMode.precisionFft
+                  ? 'Precision FFT post-processing'
+                  : 'Live temporal filter',
             ),
             _SummaryRow(
                 'Gain', '${result.parameters.gain.toStringAsFixed(1)}×'),

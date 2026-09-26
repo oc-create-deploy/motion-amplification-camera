@@ -31,4 +31,37 @@ void main() {
       );
     });
   });
+
+  group('recording duration guidance', () {
+    test('uses at least three cycles of the slowest selected motion', () {
+      final guidance = const AnalysisParameters(
+        lowerHz: .02,
+        upperHz: 1,
+      ).durationGuidance;
+
+      expect(guidance.minimumSeconds, 100);
+      expect(guidance.recommendedSeconds, 150);
+    });
+
+    test('also provides enough time to separate a narrow band', () {
+      final guidance = RecordingDurationGuidance.forBand(
+        lowerHz: 4,
+        upperHz: 4.2,
+      );
+
+      expect(guidance.minimumSeconds, 10);
+      expect(guidance.recommendedSeconds, 20);
+    });
+
+    test('precision FFT is the default saved-video mode', () {
+      expect(
+        const AnalysisParameters().processingMode,
+        ProcessingMode.precisionFft,
+      );
+      expect(
+        const AnalysisParameters().toMap()['processingMode'],
+        'precisionFft',
+      );
+    });
+  });
 }

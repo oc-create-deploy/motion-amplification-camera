@@ -16,6 +16,7 @@
 		AA0000030000000000000001 /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000040000000000000001 /* CameraView.swift */; };
 		AA0000050000000000000001 /* MotionCameraEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000060000000000000001 /* MotionCameraEngine.swift */; };
 		AA0000070000000000000001 /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = AA0000080000000000000001 /* Shaders.metal */; };
+		AA0000090000000000000001 /* PrecisionFFTProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000100000000000000001 /* PrecisionFFTProcessor.swift */; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
@@ -57,6 +58,7 @@
 		AA0000040000000000000001 /* CameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraView.swift; sourceTree = "<group>"; };
 		AA0000060000000000000001 /* MotionCameraEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionCameraEngine.swift; sourceTree = "<group>"; };
 		AA0000080000000000000001 /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
+		AA0000100000000000000001 /* PrecisionFFTProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrecisionFFTProcessor.swift; sourceTree = "<group>"; };
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
 		9740EEB21CF90195004384FC /* Debug.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; name = Debug.xcconfig; path = Flutter/Debug.xcconfig; sourceTree = "<group>"; };
 		9740EEB31CF90195004384FC /* Generated.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; name = Generated.xcconfig; path = Flutter/Generated.xcconfig; sourceTree = "<group>"; };
@@ -130,6 +132,7 @@
 				AA0000020000000000000001 /* CameraBridge.swift */,
 				AA0000040000000000000001 /* CameraView.swift */,
 				AA0000060000000000000001 /* MotionCameraEngine.swift */,
+				AA0000100000000000000001 /* PrecisionFFTProcessor.swift */,
 				AA0000080000000000000001 /* Shaders.metal */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 			);
@@ -289,6 +292,7 @@
 				AA0000010000000000000001 /* CameraBridge.swift in Sources */,
 				AA0000030000000000000001 /* CameraView.swift in Sources */,
 				AA0000050000000000000001 /* MotionCameraEngine.swift in Sources */,
+				AA0000090000000000000001 /* PrecisionFFTProcessor.swift in Sources */,
 				AA0000070000000000000001 /* Shaders.metal in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
