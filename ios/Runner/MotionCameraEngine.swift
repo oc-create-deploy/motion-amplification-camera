@@ -407,6 +407,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     fpsTimes.removeAll(keepingCapacity: false)
     displacement.removeAll(keepingCapacity: false)
     if let textureCache { CVMetalTextureCacheFlush(textureCache, 0) }
+    ciContext.clearCaches()
     needsReset = true
   }
 

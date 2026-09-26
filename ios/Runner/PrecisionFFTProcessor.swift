@@ -1,6 +1,7 @@
 import Accelerate
 import AVFoundation
 import CoreImage
+import Darwin
 import Metal
 
 /// Offline, zero-phase temporal processing for saved inspection video.
@@ -23,8 +24,12 @@ final class PrecisionFFTProcessor {
   static let maximumFrames = 9_300
 
   static func estimatedTimelineBytes(frameCount: Int, gridWidth: Int, gridHeight: Int) -> Int {
-    frameCount * gridWidth * gridHeight
-      * (MemoryLayout<UInt8>.stride + MemoryLayout<Float16>.stride)
+    // Both complete timelines are file-backed. Resident memory is bounded by
+    // one temporal signal/spectrum and one analysis frame, independent of the
+    // recording duration.
+    let fftCount = 1 << Int(ceil(log2(Double(max(16, frameCount)))))
+    return fftCount * MemoryLayout<Float>.stride * 6
+      + gridWidth * gridHeight * MemoryLayout<UInt8>.stride
   }
 
   private let device: MTLDevice
@@ -55,6 +60,7 @@ final class PrecisionFFTProcessor {
     completion: @escaping (Result<RecordingResult, Error>) -> Void
   ) {
     DispatchQueue.global(qos: .userInitiated).async {
+      var filteredURL: URL?
       do {
         progress(0.01)
         // Keep source luma inside this helper so Swift can release it before
@@ -66,9 +72,10 @@ final class PrecisionFFTProcessor {
           readProgress: { progress(0.02 + 0.18 * $0) },
           filterProgress: { progress(0.20 + 0.48 * $0) }
         )
+        filteredURL = timeline.url
         try self.renderFilteredVideo(
           sourceURL: sourceURL,
-          filteredFrameMajor: timeline.values,
+          filteredURL: timeline.url,
           frameCount: timeline.frameCount,
           gridWidth: timeline.gridWidth,
           gridHeight: timeline.gridHeight,
@@ -76,18 +83,20 @@ final class PrecisionFFTProcessor {
           expectedFPS: timeline.sampleRate,
           progress: { progress(0.68 + 0.31 * $0) },
           completion: { result in
+            try? FileManager.default.removeItem(at: timeline.url)
             progress(1)
             completion(result)
           }
         )
       } catch {
+        if let filteredURL { try? FileManager.default.removeItem(at: filteredURL) }
         completion(.failure(error))
       }
     }
   }
 
   private struct LuminanceTimeline {
-    let luma: [UInt8]
+    let url: URL
     let timestamps: [Double]
     let gridWidth: Int
     let gridHeight: Int
@@ -95,7 +104,7 @@ final class PrecisionFFTProcessor {
   }
 
   private struct FilteredTimeline {
-    let values: [Float16]
+    let url: URL
     let frameCount: Int
     let gridWidth: Int
     let gridHeight: Int
@@ -114,8 +123,12 @@ final class PrecisionFFTProcessor {
       progress: readProgress
     )
     let frameCount = analysis.timestamps.count
-    let filtered = try PrecisionFFTBandpass.filterPixels(
-      frameMajorLuma: analysis.luma,
+    let filteredURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("precision-fft-filtered-\(UUID().uuidString).bin")
+    defer { try? FileManager.default.removeItem(at: analysis.url) }
+    try PrecisionFFTBandpass.filterPixels(
+      frameMajorLumaURL: analysis.url,
+      filteredURL: filteredURL,
       frameCount: frameCount,
       pixelCount: analysis.gridWidth * analysis.gridHeight,
       sampleRate: analysis.sampleRate,
@@ -124,7 +137,7 @@ final class PrecisionFFTProcessor {
       progress: filterProgress
     )
     return FilteredTimeline(
-      values: filtered,
+      url: filteredURL,
       frameCount: frameCount,
       gridWidth: analysis.gridWidth,
       gridHeight: analysis.gridHeight,
@@ -160,7 +173,17 @@ final class PrecisionFFTProcessor {
     progress: (Double) -> Void
   ) throws -> LuminanceTimeline {
     let (reader, output) = try makeReader(url: sourceURL)
-    var luma = [UInt8]()
+    let lumaURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("precision-fft-luma-\(UUID().uuidString).bin")
+    guard FileManager.default.createFile(atPath: lumaURL.path, contents: nil) else {
+      throw EngineError.configuration("Precision FFT could not create its temporary timeline.")
+    }
+    var completed = false
+    defer {
+      if !completed { try? FileManager.default.removeItem(at: lumaURL) }
+    }
+    let lumaHandle = try FileHandle(forWritingTo: lumaURL)
+    defer { try? lumaHandle.close() }
     var timestamps = [Double]()
     var gridWidth = 0
     var gridHeight = 0
@@ -172,64 +195,68 @@ final class PrecisionFFTProcessor {
           "Precision FFT supports recordings up to about 150 seconds. Shorten the recording or use Live mode."
         )
       }
-      guard let source = CMSampleBufferGetImageBuffer(sample) else { continue }
-      if scratch == nil {
-        let width = CVPixelBufferGetWidth(source)
-        let height = CVPixelBufferGetHeight(source)
-        if width >= height {
-          gridWidth = Self.gridLongEdge
-          gridHeight = max(1, Int((Double(height) / Double(width) * Double(gridWidth)).rounded()))
-        } else {
-          gridHeight = Self.gridLongEdge
-          gridWidth = max(1, Int((Double(width) / Double(height) * Double(gridHeight)).rounded()))
-        }
-        let attributes: [String: Any] = [
-          kCVPixelBufferIOSurfacePropertiesKey as String: [:],
-        ]
-        guard CVPixelBufferCreate(
-          nil,
-          gridWidth,
-          gridHeight,
-          kCVPixelFormatType_32BGRA,
-          attributes as CFDictionary,
-          &scratch
-        ) == kCVReturnSuccess else {
-          throw EngineError.configuration("Precision FFT could not allocate its analysis buffer.")
-        }
-        let duration = AVURLAsset(url: sourceURL).duration.seconds
-        let expectedFrames = duration.isFinite && duration > 0
-          ? min(Self.maximumFrames, max(16, Int(ceil(duration * 60)) + 8))
-          : min(Self.maximumFrames, 1_800)
-        luma.reserveCapacity(expectedFrames * gridWidth * gridHeight)
-      }
-      guard let scratch else { continue }
-      let sourceImage = CIImage(cvPixelBuffer: source)
-      let transform = CGAffineTransform(
-        scaleX: CGFloat(gridWidth) / sourceImage.extent.width,
-        y: CGFloat(gridHeight) / sourceImage.extent.height
-      ).translatedBy(x: -sourceImage.extent.minX, y: -sourceImage.extent.minY)
-      ciContext.render(
-        sourceImage.transformed(by: transform),
-        to: scratch,
-        bounds: CGRect(x: 0, y: 0, width: gridWidth, height: gridHeight),
-        colorSpace: CGColorSpaceCreateDeviceRGB()
-      )
-      CVPixelBufferLockBaseAddress(scratch, .readOnly)
-      if let base = CVPixelBufferGetBaseAddress(scratch) {
-        let stride = CVPixelBufferGetBytesPerRow(scratch)
-        for y in 0..<gridHeight {
-          let row = base.advanced(by: y * stride).assumingMemoryBound(to: UInt8.self)
-          for x in 0..<gridWidth {
-            let blue = Float(row[x * 4])
-            let green = Float(row[x * 4 + 1])
-            let red = Float(row[x * 4 + 2])
-            luma.append(UInt8(clamping: Int((0.0722 * blue + 0.7152 * green + 0.2126 * red).rounded())))
+      var timestamp: Double?
+      try autoreleasepool {
+        guard let source = CMSampleBufferGetImageBuffer(sample) else { return }
+        if scratch == nil {
+          let width = CVPixelBufferGetWidth(source)
+          let height = CVPixelBufferGetHeight(source)
+          if width >= height {
+            gridWidth = Self.gridLongEdge
+            gridHeight = max(1, Int((Double(height) / Double(width) * Double(gridWidth)).rounded()))
+          } else {
+            gridHeight = Self.gridLongEdge
+            gridWidth = max(1, Int((Double(width) / Double(height) * Double(gridHeight)).rounded()))
+          }
+          let attributes: [String: Any] = [
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+          ]
+          guard CVPixelBufferCreate(
+            nil,
+            gridWidth,
+            gridHeight,
+            kCVPixelFormatType_32BGRA,
+            attributes as CFDictionary,
+            &scratch
+          ) == kCVReturnSuccess else {
+            throw EngineError.configuration("Precision FFT could not allocate its analysis buffer.")
           }
         }
+        guard let scratch else { return }
+        let sourceImage = CIImage(cvPixelBuffer: source)
+        let transform = CGAffineTransform(
+          scaleX: CGFloat(gridWidth) / sourceImage.extent.width,
+          y: CGFloat(gridHeight) / sourceImage.extent.height
+        ).translatedBy(x: -sourceImage.extent.minX, y: -sourceImage.extent.minY)
+        ciContext.render(
+          sourceImage.transformed(by: transform),
+          to: scratch,
+          bounds: CGRect(x: 0, y: 0, width: gridWidth, height: gridHeight),
+          colorSpace: CGColorSpaceCreateDeviceRGB()
+        )
+        var frame = [UInt8](repeating: 0, count: gridWidth * gridHeight)
+        CVPixelBufferLockBaseAddress(scratch, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(scratch, .readOnly) }
+        if let base = CVPixelBufferGetBaseAddress(scratch) {
+          let stride = CVPixelBufferGetBytesPerRow(scratch)
+          for y in 0..<gridHeight {
+            let row = base.advanced(by: y * stride).assumingMemoryBound(to: UInt8.self)
+            for x in 0..<gridWidth {
+              let blue = Float(row[x * 4])
+              let green = Float(row[x * 4 + 1])
+              let red = Float(row[x * 4 + 2])
+              frame[y * gridWidth + x] = UInt8(
+                clamping: Int((0.0722 * blue + 0.7152 * green + 0.2126 * red).rounded())
+              )
+            }
+          }
+        }
+        try lumaHandle.write(contentsOf: frame)
+        timestamp = CMSampleBufferGetPresentationTimeStamp(sample).seconds
       }
-      CVPixelBufferUnlockBaseAddress(scratch, .readOnly)
-      timestamps.append(CMSampleBufferGetPresentationTimeStamp(sample).seconds)
+      if let timestamp { timestamps.append(timestamp) }
       if timestamps.count % 120 == 0 {
+        ciContext.clearCaches()
         progress(min(0.98, Double(timestamps.count) / 9_000.0))
       }
     }
@@ -241,8 +268,9 @@ final class PrecisionFFTProcessor {
     }
     let duration = max(0.001, (timestamps.last ?? 0) - (timestamps.first ?? 0))
     let sampleRate = Double(timestamps.count - 1) / duration
+    completed = true
     return LuminanceTimeline(
-      luma: luma,
+      url: lumaURL,
       timestamps: timestamps,
       gridWidth: gridWidth,
       gridHeight: gridHeight,
@@ -252,7 +280,7 @@ final class PrecisionFFTProcessor {
 
   private func renderFilteredVideo(
     sourceURL: URL,
-    filteredFrameMajor: [Float16],
+    filteredURL: URL,
     frameCount: Int,
     gridWidth: Int,
     gridHeight: Int,
@@ -269,8 +297,14 @@ final class PrecisionFFTProcessor {
       .appendingPathComponent("precision-fft-amplified-\(UUID().uuidString).mov")
     var recorder: AmplifiedVideoRecorder?
     var outputTexture: MTLTexture?
+    let filteredMap = try MappedTimeline(
+      url: filteredURL,
+      byteCount: frameCount * gridWidth * gridHeight * MemoryLayout<UInt16>.stride,
+      writable: false
+    )
+    let filteredBits = filteredMap.pointer.assumingMemoryBound(to: UInt16.self)
     let bandDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-      pixelFormat: .r32Float,
+      pixelFormat: .r16Float,
       width: gridWidth,
       height: gridHeight,
       mipmapped: false
@@ -323,20 +357,12 @@ final class PrecisionFFTProcessor {
             throw EngineError.configuration("Precision FFT could not map a source frame to Metal.")
           }
           let offset = frameIndex * gridWidth * gridHeight
-          var band = [Float](repeating: 0, count: gridWidth * gridHeight)
-          for pixel in band.indices {
-            band[pixel] = Float(filteredFrameMajor[offset + pixel])
-          }
-          band.withUnsafeBytes { bytes in
-            if let base = bytes.baseAddress {
-              bandTexture.replace(
-                region: MTLRegionMake2D(0, 0, gridWidth, gridHeight),
-                mipmapLevel: 0,
-                withBytes: base,
-                bytesPerRow: gridWidth * MemoryLayout<Float>.stride
-              )
-            }
-          }
+          bandTexture.replace(
+            region: MTLRegionMake2D(0, 0, gridWidth, gridHeight),
+            mipmapLevel: 0,
+            withBytes: filteredBits.advanced(by: offset),
+            bytesPerRow: gridWidth * MemoryLayout<UInt16>.stride
+          )
           guard let command = commandQueue.makeCommandBuffer(),
                 let encoder = command.makeComputeCommandEncoder() else {
             throw EngineError.configuration("Precision FFT could not create a Metal command.")
@@ -391,6 +417,34 @@ final class PrecisionFFTProcessor {
 
 enum PrecisionFFTBandpass {
   static func filterPixels(
+    frameMajorLumaURL: URL,
+    filteredURL: URL,
+    frameCount: Int,
+    pixelCount: Int,
+    sampleRate: Double,
+    lowerHz: Double,
+    upperHz: Double,
+    progress: (Double) -> Void = { _ in }
+  ) throws {
+    let inputBytes = frameCount * pixelCount
+    let outputBytes = inputBytes * MemoryLayout<UInt16>.stride
+    let input = try MappedTimeline(url: frameMajorLumaURL, byteCount: inputBytes, writable: false)
+    let output = try MappedTimeline(url: filteredURL, byteCount: outputBytes, writable: true)
+    let source = input.pointer.assumingMemoryBound(to: UInt8.self)
+    let destination = output.pointer.assumingMemoryBound(to: UInt16.self)
+    try filterPixels(
+      frameCount: frameCount,
+      pixelCount: pixelCount,
+      sampleRate: sampleRate,
+      lowerHz: lowerHz,
+      upperHz: upperHz,
+      progress: progress,
+      sample: { source[$0 * pixelCount + $1] },
+      store: { destination[$0 * pixelCount + $1] = $2.bitPattern }
+    )
+  }
+
+  static func filterPixels(
     frameMajorLuma: [UInt8],
     frameCount: Int,
     pixelCount: Int,
@@ -399,12 +453,35 @@ enum PrecisionFFTBandpass {
     upperHz: Double,
     progress: (Double) -> Void = { _ in }
   ) throws -> [Float16] {
-    guard frameCount >= 16,
-          pixelCount > 0,
-          frameMajorLuma.count == frameCount * pixelCount,
-          sampleRate > 0,
-          lowerHz > 0,
-          upperHz > lowerHz else {
+    guard frameMajorLuma.count == frameCount * pixelCount else {
+      throw EngineError.configuration("Precision FFT received invalid temporal data.")
+    }
+    var filtered = [Float16](repeating: 0, count: frameCount * pixelCount)
+    try filterPixels(
+      frameCount: frameCount,
+      pixelCount: pixelCount,
+      sampleRate: sampleRate,
+      lowerHz: lowerHz,
+      upperHz: upperHz,
+      progress: progress,
+      sample: { frameMajorLuma[$0 * pixelCount + $1] },
+      store: { filtered[$0 * pixelCount + $1] = $2 }
+    )
+    return filtered
+  }
+
+  private static func filterPixels(
+    frameCount: Int,
+    pixelCount: Int,
+    sampleRate: Double,
+    lowerHz: Double,
+    upperHz: Double,
+    progress: (Double) -> Void,
+    sample: (Int, Int) -> UInt8,
+    store: (Int, Int, Float16) -> Void
+  ) throws {
+    guard frameCount >= 16, pixelCount > 0, sampleRate > 0,
+          lowerHz > 0, upperHz > lowerHz else {
       throw EngineError.configuration("Precision FFT received invalid temporal data.")
     }
     let fftCount = 1 << Int(ceil(log2(Double(frameCount))))
@@ -425,13 +502,12 @@ enum PrecisionFFTBandpass {
       throw EngineError.configuration("Precision FFT could not create its temporal transform.")
     }
     let zeros = [Float](repeating: 0, count: fftCount)
-    var filtered = [Float16](repeating: 0, count: frameCount * pixelCount)
     var signal = [Float](repeating: 0, count: fftCount)
 
     for pixel in 0..<pixelCount {
       var mean: Float = 0
       for frame in 0..<frameCount {
-        let value = Float(frameMajorLuma[frame * pixelCount + pixel]) / 255
+        let value = Float(sample(frame, pixel)) / 255
         signal[frame] = value
         mean += value
       }
@@ -452,12 +528,43 @@ enum PrecisionFFTBandpass {
       let temporal = inverse.transform(real: spectrum.real, imaginary: spectrum.imaginary)
       let scale = 1 / Float(fftCount)
       for frame in 0..<frameCount {
-        filtered[frame * pixelCount + pixel] = Float16(temporal.real[frame] * scale)
+        store(frame, pixel, Float16(temporal.real[frame] * scale))
       }
       if pixel % 32 == 0 { progress(Double(pixel) / Double(pixelCount)) }
     }
     progress(1)
-    return filtered
+  }
+}
+
+private final class MappedTimeline {
+  let pointer: UnsafeMutableRawPointer
+  private let byteCount: Int
+  private let descriptor: Int32
+
+  init(url: URL, byteCount: Int, writable: Bool) throws {
+    self.byteCount = byteCount
+    let flags = writable ? (O_RDWR | O_CREAT | O_TRUNC) : O_RDONLY
+    descriptor = open(url.path, flags, S_IRUSR | S_IWUSR)
+    guard descriptor >= 0 else {
+      throw EngineError.configuration("Precision FFT could not open its temporary timeline.")
+    }
+    if writable, ftruncate(descriptor, off_t(byteCount)) != 0 {
+      close(descriptor)
+      throw EngineError.configuration("Precision FFT could not size its temporary timeline.")
+    }
+    let protection = writable ? (PROT_READ | PROT_WRITE) : PROT_READ
+    guard let mapped = mmap(nil, byteCount, protection, MAP_SHARED, descriptor, 0),
+          mapped != MAP_FAILED else {
+      close(descriptor)
+      throw EngineError.configuration("Precision FFT could not map its temporary timeline.")
+    }
+    pointer = mapped
+  }
+
+  deinit {
+    msync(pointer, byteCount, MS_ASYNC)
+    munmap(pointer, byteCount)
+    close(descriptor)
   }
 }
 

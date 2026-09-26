@@ -133,7 +133,53 @@ final class MotionCameraEngineTests: XCTestCase {
     )
 
     XCTAssertEqual(PrecisionFFTProcessor.gridLongEdge, 64)
-    XCTAssertLessThan(bytes, 65 * 1_024 * 1_024)
+    XCTAssertLessThan(bytes, 1 * 1_024 * 1_024)
+  }
+
+  func testPrecisionFFTFileBackedTimelineSelectsBand() throws {
+    let sampleRate = 64.0
+    let frameCount = 256
+    let pixelCount = 2
+    var samples = [UInt8](repeating: 0, count: frameCount * pixelCount)
+    for frame in 0..<frameCount {
+      let time = Double(frame) / sampleRate
+      samples[frame * pixelCount] = UInt8(
+        clamping: Int((128 + 80 * sin(2 * Double.pi * 5 * time)).rounded())
+      )
+      samples[frame * pixelCount + 1] = UInt8(
+        clamping: Int((128 + 80 * sin(2 * Double.pi * 15 * time)).rounded())
+      )
+    }
+    let directory = FileManager.default.temporaryDirectory
+    let input = directory.appendingPathComponent("precision-test-\(UUID().uuidString).luma")
+    let output = directory.appendingPathComponent("precision-test-\(UUID().uuidString).band")
+    defer {
+      try? FileManager.default.removeItem(at: input)
+      try? FileManager.default.removeItem(at: output)
+    }
+    try Data(samples).write(to: input)
+    try PrecisionFFTBandpass.filterPixels(
+      frameMajorLumaURL: input,
+      filteredURL: output,
+      frameCount: frameCount,
+      pixelCount: pixelCount,
+      sampleRate: sampleRate,
+      lowerHz: 4,
+      upperHz: 6
+    )
+    let data = try Data(contentsOf: output)
+    let values = data.withUnsafeBytes { bytes -> [Float16] in
+      Array(bytes.bindMemory(to: UInt16.self)).map(Float16.init(bitPattern:))
+    }
+    let inBandRMS = sqrt(
+      (0..<frameCount).map { pow(Double(values[$0 * pixelCount]), 2) }.reduce(0, +)
+        / Double(frameCount)
+    )
+    let outOfBandRMS = sqrt(
+      (0..<frameCount).map { pow(Double(values[$0 * pixelCount + 1]), 2) }.reduce(0, +)
+        / Double(frameCount)
+    )
+    XCTAssertGreaterThan(inBandRMS, outOfBandRMS * 8)
   }
 
   func testCalibrationConversion() {
