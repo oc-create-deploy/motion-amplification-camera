@@ -123,6 +123,11 @@ final class MotionCameraEngineTests: XCTestCase {
     XCTAssertGreaterThan(inBandRMS, outOfBandRMS * 8)
   }
 
+  func testPrecisionFFTUsesIntensityReconstructionWithoutSpatialWarp() {
+    XCTAssertTrue(precisionFFTKernelSourceForTesting.contains("sourceColor.rgb + float3(band * p.gain)"))
+    XCTAssertFalse(precisionFFTKernelSourceForTesting.contains("displacement"))
+  }
+
   func testPrecisionFFTWorstCaseTimelineStaysMemoryBounded() {
     let width = 36
     let height = PrecisionFFTProcessor.gridLongEdge

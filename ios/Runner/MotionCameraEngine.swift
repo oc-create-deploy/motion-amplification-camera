@@ -546,7 +546,11 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       return
     }
     encoder.setComputePipelineState(pipeline); encoder.setTexture(input, index: 0); encoder.setTexture(fastState, index: 1); encoder.setTexture(slowState, index: 2); encoder.setTexture(rendered, index: 3)
-    var params = FilterUniforms(dt: dt, lowerHz: Float(lowerHz), upperHz: Float(upperHz), gain: analyzing ? Float(gain) : 0, reset: needsReset ? 1 : 0, luminanceOnly: colorMode == "luminance" ? 1 : 0)
+    // Precision FFT is intentionally post-process only. Keep its live preview
+    // equal to the source frame so the app never mixes the real-time spatial
+    // warp with the FFT-only saved result.
+    let liveGain = analyzing && processingMode != "precisionFft" ? Float(gain) : 0
+    var params = FilterUniforms(dt: dt, lowerHz: Float(lowerHz), upperHz: Float(upperHz), gain: liveGain, reset: needsReset ? 1 : 0, luminanceOnly: colorMode == "luminance" ? 1 : 0)
     encoder.setBytes(&params, length: MemoryLayout<FilterUniforms>.stride, index: 0); let threads = MTLSize(width: 16, height: 16, depth: 1); encoder.dispatchThreads(MTLSize(width: width, height: height, depth: 1), threadsPerThreadgroup: threads); encoder.endEncoding()
     command.commit()
     command.waitUntilCompleted()

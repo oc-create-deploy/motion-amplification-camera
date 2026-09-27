@@ -476,10 +476,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ),
                         ),
                       _SliderRow(
-                        label: 'Gain',
+                        label: parameters.processingMode ==
+                                ProcessingMode.precisionFft
+                            ? 'FFT intensity gain'
+                            : 'Motion gain',
                         value: parameters.gain,
                         min: 0,
-                        max: 250,
+                        max: parameters.processingMode ==
+                                ProcessingMode.precisionFft
+                            ? 40
+                            : 250,
                         suffix: '×',
                         onChanged: analyzing
                             ? null
@@ -581,36 +587,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ),
                         ),
                       ),
-                      DropdownButtonFormField<ProcessingMode>(
-                        initialValue: parameters.processingMode,
-                        decoration: const InputDecoration(
-                          labelText: 'Saved-video processing',
-                          helperText:
-                              'Precision FFT filters the completed recording before export.',
+                      const Card(
+                        margin: EdgeInsets.only(top: 4, bottom: 12),
+                        child: Padding(
+                          padding: EdgeInsets.all(12),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(Icons.auto_graph, size: 19),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'FFT-only saved video: the selected temporal luminance signal is added to the original sharp frames. No spatial warp is applied.',
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                        items: const [
-                          DropdownMenuItem(
-                            value: ProcessingMode.precisionFft,
-                            child: Text('Precision FFT (post-process)'),
-                          ),
-                          DropdownMenuItem(
-                            value: ProcessingMode.live,
-                            child: Text('Live temporal filter'),
-                          ),
-                        ],
-                        onChanged: analyzing
-                            ? null
-                            : (value) {
-                                if (value != null) {
-                                  setState(
-                                    () => parameters = parameters.copyWith(
-                                      processingMode: value,
-                                    ),
-                                  );
-                                }
-                              },
                       ),
-                      const SizedBox(height: 12),
                       Card(
                         margin: const EdgeInsets.only(top: 4, bottom: 12),
                         child: Padding(
@@ -1021,7 +1015,11 @@ class SessionSummaryScreen extends StatelessWidget {
                   : 'Live temporal filter',
             ),
             _SummaryRow(
-                'Gain', '${result.parameters.gain.toStringAsFixed(1)}×'),
+              result.parameters.processingMode == ProcessingMode.precisionFft
+                  ? 'FFT intensity gain'
+                  : 'Motion gain',
+              '${result.parameters.gain.toStringAsFixed(1)}×',
+            ),
             _SummaryRow(
               'Dominant frequency',
               '${result.measurement.dominantHz.toStringAsFixed(2)} Hz',

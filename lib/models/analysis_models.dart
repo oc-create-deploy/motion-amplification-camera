@@ -54,7 +54,7 @@ class AnalysisParameters {
   const AnalysisParameters({
     this.lowerHz = 0.1,
     this.upperHz = 8.0,
-    this.gain = 40.0,
+    this.gain = 8.0,
     this.quality = ProcessingQuality.balanced,
     this.colorMode = ColorMode.luminance,
     this.processingMode = ProcessingMode.precisionFft,
@@ -86,8 +86,9 @@ class AnalysisParameters {
     if (upperHz >= 0.45 * fps) {
       return 'Upper cutoff must stay below 45% of measured FPS.';
     }
-    if (!gain.isFinite || gain < 0 || gain > 250) {
-      return 'Gain must be between 0 and 250.';
+    final maximumGain = processingMode == ProcessingMode.precisionFft ? 40 : 250;
+    if (!gain.isFinite || gain < 0 || gain > maximumGain) {
+      return 'Gain must be between 0 and $maximumGain in this mode.';
     }
     return null;
   }

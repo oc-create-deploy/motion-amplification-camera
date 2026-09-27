@@ -9,12 +9,13 @@ import Metal
 /// The live camera path stays responsive and timestamp-aware. In Precision
 /// FFT mode, the unamplified ProRes source is retained temporarily, reduced to
 /// a small luminance pyramid level, filtered across the complete recording,
-/// and then used as a displacement field while the full-resolution source is
-/// decoded a second time. This is the mobile-native equivalent of the batch
-/// FFT idea used by classic Eulerian video magnification implementations.
+/// and then added back to the untouched full-resolution source as a luminance
+/// variation. This intentionally avoids spatial warping: Precision mode is a
+/// classic Eulerian, FFT-only reconstruction whose output retains the source
+/// frame's spatial detail.
 final class PrecisionFFTProcessor {
   // A 64-pixel analysis edge is sufficient for the smooth, low-frequency
-  // displacement field while cutting the two frame-major buffers by 56%
+  // intensity field while cutting the two frame-major buffers by 56%
   // compared with build 12. The full-resolution ProRes image is still used
   // for reconstruction and export.
   static let gridLongEdge = 64
@@ -575,8 +576,6 @@ private let precisionFFTKernelSource = #"""
 using namespace metal;
 
 struct PrecisionFFTUniforms { float gain; };
-inline float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
-
 kernel void precisionFFTAmplify(
   texture2d<float, access::sample> source [[texture(0)]],
   texture2d<float, access::sample> temporalBand [[texture(1)]],
@@ -586,18 +585,12 @@ kernel void precisionFFTAmplify(
   if (gid.x >= source.get_width() || gid.y >= source.get_height()) return;
   constexpr sampler linearSampler(coord::normalized, address::clamp_to_edge, filter::linear);
   float2 size = float2(source.get_width(), source.get_height());
-  float2 texel = 1.0 / size;
-  float2 uv = (float2(gid) + 0.5) * texel;
-  float gx = 0.5 * (luma(source.sample(linearSampler, uv + float2(texel.x, 0)).rgb)
-                  - luma(source.sample(linearSampler, uv - float2(texel.x, 0)).rgb));
-  float gy = 0.5 * (luma(source.sample(linearSampler, uv + float2(0, texel.y)).rgb)
-                  - luma(source.sample(linearSampler, uv - float2(0, texel.y)).rgb));
-  float2 gradient = float2(gx, gy);
-  float energy = dot(gradient, gradient);
-  float confidence = smoothstep(0.000015, 0.0025, energy);
+  float2 uv = (float2(gid) + 0.5) / size;
+  float4 sourceColor = source.sample(linearSampler, uv);
   float band = temporalBand.sample(linearSampler, uv).r;
-  float2 displacement = -band * gradient / max(energy, 0.000015);
-  float2 amplified = clamp(displacement * p.gain * confidence, float2(-40.0), float2(40.0));
-  output.write(clamp(source.sample(linearSampler, uv - amplified * texel), 0.0, 1.0), gid);
+  float3 amplified = clamp(sourceColor.rgb + float3(band * p.gain), 0.0, 1.0);
+  output.write(float4(amplified, sourceColor.a), gid);
 }
 """#
+
+let precisionFFTKernelSourceForTesting = precisionFFTKernelSource

@@ -20,7 +20,7 @@ class AboutScreen extends StatelessWidget {
             ),
             _Section(
               'Algorithm',
-              'Live mode builds a multi-scale Laplacian signal, applies a timestamp-aware temporal band-pass, estimates sub-pixel displacement in the gradient domain, and warps the original frame. Precision FFT mode records a high-fidelity source, applies a zero-phase temporal FFT band-pass across the complete recording, then reconstructs the amplified ProRes video on-device. Vision registration estimates ROI translation; a Hann-windowed vDSP FFT estimates dominant frequency.',
+              'Saved videos use Precision FFT only. The app records a high-fidelity source, applies a zero-phase temporal FFT band-pass across the complete recording, then adds only that filtered luminance variation back to the untouched source frames. It does not spatially warp or resample the source image. The live preview remains unamplified so it accurately represents framing and focus. Vision registration estimates ROI translation; a Hann-windowed vDSP FFT estimates dominant frequency.',
             ),
             _Section(
               'Limitations',

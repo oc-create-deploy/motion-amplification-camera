@@ -62,6 +62,21 @@ void main() {
         const AnalysisParameters().toMap()['processingMode'],
         'precisionFft',
       );
+      expect(const AnalysisParameters().gain, 8);
+    });
+
+    test('precision FFT limits intensity gain independently of live mode', () {
+      expect(
+        const AnalysisParameters(gain: 41).validate(60),
+        isNotNull,
+      );
+      expect(
+        const AnalysisParameters(
+          gain: 250,
+          processingMode: ProcessingMode.live,
+        ).validate(60),
+        isNull,
+      );
     });
   });
 }
