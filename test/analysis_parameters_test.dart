@@ -89,4 +89,33 @@ void main() {
       );
     });
   });
+
+  group('automatic camera distance', () {
+    test('estimates distance from known span and field of view', () {
+      final calibration = Calibration.fromReference(
+        pixelLength: 200,
+        millimeters: 100,
+      );
+
+      final distance = calibration.estimatedDistanceMeters(
+        horizontalFieldOfViewDegrees: 60,
+        referenceWidthFraction: .1,
+      );
+
+      expect(calibration.knownLengthMillimeters, 100);
+      expect(calibration.referencePixelLength, 200);
+      expect(distance, closeTo(.866, .002));
+    });
+
+    test('does not claim distance without a known length', () {
+      const legacy = Calibration(pixelsPerMillimeter: 2);
+      expect(
+        legacy.estimatedDistanceMeters(
+          horizontalFieldOfViewDegrees: 60,
+          referenceWidthFraction: .1,
+        ),
+        isNull,
+      );
+    });
+  });
 }

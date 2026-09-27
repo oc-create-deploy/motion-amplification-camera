@@ -9,6 +9,9 @@ class CameraStatus {
     this.fps = 0,
     this.measuredFps = 0,
     this.frameWidth = 0,
+    this.horizontalFieldOfView = 0,
+    this.horizonRollDegrees = 0,
+    this.horizonPitchDegrees = 0,
     this.torchAvailable = false,
     this.cameraReady = false,
     this.previewActive = false,
@@ -28,6 +31,8 @@ class CameraStatus {
   });
   final double fps, measuredFps;
   final double frameWidth;
+  final double horizontalFieldOfView;
+  final double horizonRollDegrees, horizonPitchDegrees;
   final bool torchAvailable,
       cameraReady,
       previewActive,
@@ -44,6 +49,12 @@ class CameraStatus {
         fps: (map['targetFps'] as num?)?.toDouble() ?? 0,
         measuredFps: (map['measuredFps'] as num?)?.toDouble() ?? 0,
         frameWidth: (map['frameWidth'] as num?)?.toDouble() ?? 0,
+        horizontalFieldOfView:
+            (map['horizontalFieldOfView'] as num?)?.toDouble() ?? 0,
+        horizonRollDegrees:
+            (map['horizonRollDegrees'] as num?)?.toDouble() ?? 0,
+        horizonPitchDegrees:
+            (map['horizonPitchDegrees'] as num?)?.toDouble() ?? 0,
         torchAvailable: map['torchAvailable'] == true,
         cameraReady: map['cameraReady'] == true,
         previewActive: map['previewActive'] == true,

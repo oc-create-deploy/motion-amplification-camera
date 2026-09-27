@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' show FontFeature, PointMode;
+import 'dart:math' as math;
+import 'dart:ui' show FontFeature;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -214,12 +215,164 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               : Icon(analyzing ? Icons.stop : Icons.play_arrow),
           label: Text(
             finalizing && status.postProcessing
-                ? 'Precision FFT ${((status.processingProgress) * 100).clamp(0, 100).toStringAsFixed(0)}%'
+                ? 'Processing ${((status.processingProgress) * 100).clamp(0, 100).toStringAsFixed(0)}%'
                 : finalizing
                     ? 'Finalizing amplified video…'
                     : analyzing
                         ? 'Stop & save results'
                         : 'Start analysis',
+          ),
+        ),
+      );
+
+  double? get estimatedDistanceMeters => calibration?.estimatedDistanceMeters(
+        horizontalFieldOfViewDegrees: status.horizontalFieldOfView,
+        referenceWidthFraction: roi.width.abs().clamp(.01, 1).toDouble(),
+      );
+
+  String get knownLengthLabel => calibration?.hasKnownLength == true
+      ? 'Known ${calibration!.knownLengthMillimeters.toStringAsFixed(1)} mm'
+      : 'Known length —';
+
+  Widget _cameraControls(Size previewSize) => Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.tune, size: 19),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Camera controls',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  Text(
+                    estimatedDistanceMeters == null
+                        ? 'Distance —'
+                        : '≈ ${estimatedDistanceMeters!.toStringAsFixed(2)} m',
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  const Text('Exposure'),
+                  Expanded(
+                    child: Slider(
+                      value: exposureBias
+                          .clamp(
+                            status.minExposureBias,
+                            status.maxExposureBias <= status.minExposureBias
+                                ? status.minExposureBias + .1
+                                : status.maxExposureBias,
+                          )
+                          .toDouble(),
+                      min: status.minExposureBias,
+                      max: status.maxExposureBias <= status.minExposureBias
+                          ? status.minExposureBias + .1
+                          : status.maxExposureBias,
+                      divisions: 24,
+                      onChanged: _setExposureBias,
+                    ),
+                  ),
+                  SizedBox(
+                    width: 54,
+                    child: Text(
+                      '${exposureBias >= 0 ? '+' : ''}${exposureBias.toStringAsFixed(1)} EV',
+                      textAlign: TextAlign.end,
+                    ),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  Expanded(
+                    child: _StableToggle(
+                      label: 'Focus',
+                      icon: Icons.center_focus_strong,
+                      selected: focusLocked,
+                      onPressed: () => _lock('focus', !focusLocked),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: _StableToggle(
+                      label: 'Exposure',
+                      icon: Icons.exposure,
+                      selected: exposureLocked,
+                      onPressed: () => _lock('exposure', !exposureLocked),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: _StableToggle(
+                      label: 'WB',
+                      icon: Icons.wb_sunny_outlined,
+                      selected: whiteBalanceLocked,
+                      onPressed: () =>
+                          _lock('whiteBalance', !whiteBalanceLocked),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: _StableToggle(
+                      label: 'Torch',
+                      icon: Icons.flashlight_on_outlined,
+                      selected: torch,
+                      onPressed: status.torchAvailable
+                          ? () async {
+                              await camera.setTorch(!torch);
+                              setState(() => torch = !torch);
+                            }
+                          : null,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _calibrate(previewSize),
+                      icon: const Icon(Icons.straighten),
+                      label: const Text('Set known length'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton.filledTonal(
+                    tooltip: 'Save processed snapshot',
+                    onPressed: () async {
+                      final result = await camera.snapshot();
+                      if (mounted) {
+                        _message(
+                          result == null
+                              ? 'Snapshot unavailable.'
+                              : 'Snapshot saved to Photos.',
+                        );
+                      }
+                    },
+                    icon: const Icon(Icons.camera_alt_outlined),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                estimatedDistanceMeters == null
+                    ? 'Set a known length across the horizon bar to estimate object distance automatically.'
+                    : 'Camera distance is estimated from the known span and lens field of view. Keep the reference perpendicular to the camera.',
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: Colors.white60),
+              ),
+            ],
           ),
         ),
       );
@@ -318,46 +471,89 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 1,
                               ),
                             );
+                            final left = math.min(dragStart!.dx, end.dx);
+                            final right = math.max(dragStart!.dx, end.dx);
+                            final centerY =
+                                ((dragStart!.dy + end.dy) / 2)
+                                    .clamp(.14, .86)
+                                    .toDouble();
                             setState(
-                                () => roi = Rect.fromPoints(dragStart!, end));
+                              () => roi = Rect.fromCenter(
+                                center: Offset((left + right) / 2, centerY),
+                                width: (right - left).clamp(.03, 1).toDouble(),
+                                height: .28,
+                              ),
+                            );
                           },
-                          onPanEnd: (_) {
+                          onPanEnd: (_) async {
                             dragStart = null;
                             if (roi.width > .03 && roi.height > .03) {
-                              camera.setRoi(
+                              await camera.setRoi(
                                 roi.left,
                                 roi.top,
                                 roi.width,
                                 roi.height,
                               );
+                              if (calibration?.hasKnownLength == true) {
+                                final pixelWidth = roi.width *
+                                    (status.frameWidth > 0
+                                        ? status.frameWidth
+                                        : cameraBounds.maxWidth);
+                                final updated = Calibration.fromReference(
+                                  pixelLength: pixelWidth,
+                                  millimeters:
+                                      calibration!.knownLengthMillimeters,
+                                );
+                                await store.save(updated);
+                                if (mounted) {
+                                  setState(() => calibration = updated);
+                                }
+                              }
                             }
                           },
-                          child:
-                              CustomPaint(painter: _RoiPainter(roi, analyzing)),
+                          child: CustomPaint(
+                            painter: _HorizonPainter(
+                              roi: roi,
+                              rollDegrees: status.horizonRollDegrees,
+                              active: analyzing,
+                            ),
+                          ),
                         ),
                       ),
                       Positioned(
                         top: 8,
                         left: 8,
-                        child: _StatusChip(
-                          label: '${status.measuredFps.toStringAsFixed(1)} FPS',
-                          color: status.measuredFps > 0
-                              ? Colors.cyan
-                              : Colors.amber,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _StatusChip(
+                              label: knownLengthLabel,
+                              color: calibration?.hasKnownLength == true
+                                  ? Colors.cyan
+                                  : Colors.amber,
+                            ),
+                            const SizedBox(height: 6),
+                            _StatusChip(
+                              label: estimatedDistanceMeters == null
+                                  ? 'Distance —'
+                                  : '≈ ${estimatedDistanceMeters!.toStringAsFixed(2)} m',
+                              color: estimatedDistanceMeters == null
+                                  ? Colors.white54
+                                  : Colors.greenAccent,
+                            ),
+                            if (analyzing) ...[
+                              const SizedBox(height: 6),
+                              _StatusChip(
+                                label:
+                                    '● REC ${status.recordedDuration.toStringAsFixed(1)} s',
+                                color: status.recording
+                                    ? Colors.redAccent
+                                    : Colors.amber,
+                              ),
+                            ],
+                          ],
                         ),
                       ),
-                      if (analyzing)
-                        Positioned(
-                          top: 44,
-                          left: 8,
-                          child: _StatusChip(
-                            label:
-                                '● REC ${status.recordedDuration.toStringAsFixed(1)} s',
-                            color: status.recording
-                                ? Colors.redAccent
-                                : Colors.amber,
-                          ),
-                        ),
                       Positioned(
                         top: 8,
                         right: 8,
@@ -389,6 +585,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
                   child: _analysisButton(),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                  child: _cameraControls(
+                    Size(bounds.maxWidth, bounds.maxWidth * .75),
+                  ),
                 ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
@@ -478,7 +680,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       _SliderRow(
                         label: parameters.processingMode ==
                                 ProcessingMode.precisionFft
-                            ? 'FFT intensity gain'
+                            ? 'Algorithm gain'
                             : 'Motion gain',
                         value: parameters.gain,
                         min: 0,
@@ -536,7 +738,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               ),
                               const SizedBox(height: 8),
                               Text(
-                                'FFT analysis uses the original capture timing. Only the saved result is accelerated so slow movement is easier to compare.',
+                                'The analysis uses the original capture timing. Only the saved result is accelerated so slow movement is easier to compare.',
                                 style: Theme.of(context)
                                     .textTheme
                                     .bodySmall
@@ -592,7 +794,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     child: Text(
                                       parameters.processingMode ==
                                               ProcessingMode.precisionFft
-                                          ? 'Precision FFT recording length'
+                                          ? 'Algorithm recording length'
                                           : 'Recording length guidance',
                                       style: const TextStyle(
                                         fontWeight: FontWeight.w600,
@@ -650,63 +852,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               SizedBox(width: 8),
                               Expanded(
                                 child: Text(
-                                  'FFT-only saved video: the selected temporal luminance signal is added to the original sharp frames, then playback is accelerated at the selected speed. No spatial warp is applied.',
+                                  'The saved video adds only the selected temporal signal to the original sharp frames, then accelerates playback at the selected speed. No spatial warp is applied.',
                                 ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      Card(
-                        margin: const EdgeInsets.only(top: 4, bottom: 12),
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  const Icon(Icons.exposure, size: 19),
-                                  const SizedBox(width: 8),
-                                  const Expanded(
-                                    child: Text(
-                                      'Exposure compensation',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ),
-                                  Text(
-                                    '${exposureBias >= 0 ? '+' : ''}${exposureBias.toStringAsFixed(1)} EV',
-                                  ),
-                                ],
-                              ),
-                              Slider(
-                                value: exposureBias
-                                    .clamp(
-                                      status.minExposureBias,
-                                      status.maxExposureBias <=
-                                              status.minExposureBias
-                                          ? status.minExposureBias + .1
-                                          : status.maxExposureBias,
-                                    )
-                                    .toDouble(),
-                                min: status.minExposureBias,
-                                max: status.maxExposureBias <=
-                                        status.minExposureBias
-                                    ? status.minExposureBias + .1
-                                    : status.maxExposureBias,
-                                divisions: 24,
-                                label:
-                                    '${exposureBias >= 0 ? '+' : ''}${exposureBias.toStringAsFixed(1)} EV',
-                                onChanged: _setExposureBias,
-                              ),
-                              Text(
-                                'ISO ${status.iso.toStringAsFixed(0)} · ${status.exposureDuration > 0 ? '1/${(1 / status.exposureDuration).round()} s' : 'Auto shutter'}',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .labelMedium
-                                    ?.copyWith(color: Colors.white60),
                               ),
                             ],
                           ),
@@ -763,81 +910,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        alignment: WrapAlignment.center,
-                        children: [
-                          FilterChip(
-                            label: const Text('Focus lock'),
-                            selected: focusLocked,
-                            onSelected: (v) => _lock('focus', v),
-                          ),
-                          FilterChip(
-                            label: const Text('Exposure lock'),
-                            selected: exposureLocked,
-                            onSelected: (v) => _lock('exposure', v),
-                          ),
-                          FilterChip(
-                            label: const Text('WB lock'),
-                            selected: whiteBalanceLocked,
-                            onSelected: (v) => _lock('whiteBalance', v),
-                          ),
-                          FilterChip(
-                            label: const Text('Torch'),
-                            selected: torch,
-                            onSelected: status.torchAvailable
-                                ? (v) async {
-                                    await camera.setTorch(v);
-                                    setState(() => torch = v);
-                                  }
-                                : null,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: () {
-                                setState(
-                                  () => roi =
-                                      const Rect.fromLTWH(.2, .25, .6, .4),
-                                );
-                                camera.resetRoi();
-                              },
-                              icon: const Icon(Icons.center_focus_weak),
-                              label: const Text('Reset ROI'),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: () => _calibrate(
-                                Size(bounds.maxWidth, bounds.maxWidth * .75),
-                              ),
-                              icon: const Icon(Icons.straighten),
-                              label: const Text('Calibrate'),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          IconButton.filledTonal(
-                            tooltip: 'Save processed snapshot',
-                            onPressed: () async {
-                              final result = await camera.snapshot();
-                              if (mounted) {
-                                _message(
-                                  result == null
-                                      ? 'Snapshot unavailable.'
-                                      : 'Snapshot saved to Photos.',
-                                );
-                              }
-                            },
-                            icon: const Icon(Icons.camera_alt_outlined),
-                          ),
-                        ],
-                      ),
                     ],
                   ),
                 ),
@@ -945,41 +1017,90 @@ class _SliderRow extends StatelessWidget {
   }
 }
 
-class _RoiPainter extends CustomPainter {
-  _RoiPainter(this.roi, this.active);
+class _HorizonPainter extends CustomPainter {
+  _HorizonPainter({
+    required this.roi,
+    required this.rollDegrees,
+    required this.active,
+  });
   final Rect roi;
+  final double rollDegrees;
   final bool active;
   @override
   void paint(Canvas canvas, Size size) {
-    final rect = Rect.fromLTWH(
-      roi.left * size.width,
-      roi.top * size.height,
-      roi.width * size.width,
-      roi.height * size.height,
+    final center = Offset(
+      roi.center.dx.clamp(0, 1).toDouble() * size.width,
+      roi.center.dy.clamp(0, 1).toDouble() * size.height,
     );
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..color = active ? Colors.cyanAccent : Colors.amber
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2,
+    final halfWidth =
+        roi.width.abs().clamp(.03, 1).toDouble() * size.width / 2;
+    final color = active ? Colors.cyanAccent : Colors.amber;
+    final isLevel = rollDegrees.abs() <= 1.0;
+    final paint = Paint()
+      ..color = isLevel ? Colors.greenAccent : color
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round;
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(rollDegrees * math.pi / 180);
+    canvas.drawLine(Offset(-halfWidth, 0), Offset(halfWidth, 0), paint);
+    canvas.drawLine(
+      Offset(-halfWidth, -10),
+      Offset(-halfWidth, 10),
+      paint,
     );
-    final corner = Paint()
-      ..color = active ? Colors.cyanAccent : Colors.amber
-      ..strokeWidth = 5;
-    for (final p in [
-      rect.topLeft,
-      rect.topRight,
-      rect.bottomLeft,
-      rect.bottomRight,
-    ]) {
-      canvas.drawPoints(PointMode.points, [p], corner);
-    }
+    canvas.drawLine(
+      Offset(halfWidth, -10),
+      Offset(halfWidth, 10),
+      paint,
+    );
+    canvas.drawCircle(Offset.zero, 4, paint..style = PaintingStyle.stroke);
+    canvas.restore();
   }
 
   @override
-  bool shouldRepaint(covariant _RoiPainter old) =>
-      old.roi != roi || old.active != active;
+  bool shouldRepaint(covariant _HorizonPainter old) =>
+      old.roi != roi ||
+      old.rollDegrees != rollDegrees ||
+      old.active != active;
+}
+
+class _StableToggle extends StatelessWidget {
+  const _StableToggle({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onPressed,
+  });
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: 58,
+        child: FilledButton.tonal(
+          onPressed: onPressed,
+          style: FilledButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+            backgroundColor: selected
+                ? Theme.of(context).colorScheme.primaryContainer
+                : Theme.of(context).colorScheme.surfaceContainerHighest,
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 18),
+              const SizedBox(height: 3),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(label, maxLines: 1),
+              ),
+            ],
+          ),
+        ),
+      );
 }
 
 class SessionSummaryScreen extends StatelessWidget {
@@ -1059,7 +1180,10 @@ class SessionSummaryScreen extends StatelessWidget {
               'Playback speed',
               '${result.parameters.playbackSpeed.toStringAsFixed(0)}×',
             ),
-            _SummaryRow('Measured FPS', result.measuredFps.toStringAsFixed(2)),
+            _SummaryRow(
+              'Sampling rate',
+              '${result.measuredFps.toStringAsFixed(2)} frames/s',
+            ),
             _SummaryRow(
               'Band',
               '${result.parameters.lowerHz.toStringAsFixed(2)}–${result.parameters.upperHz.toStringAsFixed(2)} Hz',
@@ -1067,12 +1191,12 @@ class SessionSummaryScreen extends StatelessWidget {
             _SummaryRow(
               'Processing',
               result.parameters.processingMode == ProcessingMode.precisionFft
-                  ? 'Precision FFT post-processing'
+                  ? 'Precision algorithm'
                   : 'Live temporal filter',
             ),
             _SummaryRow(
               result.parameters.processingMode == ProcessingMode.precisionFft
-                  ? 'FFT intensity gain'
+                  ? 'Algorithm gain'
                   : 'Motion gain',
               '${result.parameters.gain.toStringAsFixed(1)}×',
             ),

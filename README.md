@@ -6,13 +6,13 @@ An iPhone-only Flutter application that visualizes subtle periodic structural mo
 
 ## What works in v1
 
-- Unamplified live rear-camera preview plus whole-recording Precision FFT post-processing.
+- Unamplified live rear-camera preview plus whole-recording precision post-processing.
 - Best supported format negotiation, preferring a bounded 720p/120 FPS mode and automatically falling back to bounded 1080p/60 FPS when the camera does not support 120 FPS. The UI reports measured—not assumed—FPS.
 - Apple ProRes 4444 MOV export capped at 60 FPS, so 120 FPS analysis footage is not saved as slow motion.
 - Start/stop analysis beside the preview, touch-drag ROI, gain/band controls, luma/color modes, three processing quality settings, torch, exposure compensation, and focus/exposure/white-balance locks.
 - ROI translation in pixels, RMS/peak displacement, dominant frequency, confidence, compact history chart, and explicit warnings.
 - Known-length calibration stored locally; millimeters never appear unless calibration is valid.
-- Saved video always uses Precision FFT: it records an unamplified ProRes source, applies a zero-phase temporal FFT band-pass across the complete recording, and adds the selected luminance variation back to each untouched full-resolution source frame. It performs no spatial warp or source resampling, preserving source detail in the final ProRes 4444 MOV. Export playback can be accelerated at 1×, 2×, 4× (default), or 8× while FFT analysis continues to use the original capture timestamps.
+- Saved video always uses the precision algorithm: it records an unamplified ProRes source, isolates the selected temporal band across the complete recording, and adds the selected luminance variation back to each untouched full-resolution source frame. It performs no spatial warp or source resampling, preserving source detail in the final ProRes 4444 MOV. Export playback can be accelerated at 1×, 2×, 4× (default), or 8× while analysis continues to use the original capture timestamps.
 - Frequency-aware guidance recommends at least two cycles and preferably three; for 0.02 Hz, that is 100 seconds minimum and 150 seconds recommended.
 - Processed still snapshots and amplified videos are saved to Photos only after explicit user action and add-only permission.
 - Safety onboarding, accessibility semantics, Dynamic Type-friendly scrolling, dark industrial theme, privacy/about/limitations content.
@@ -27,10 +27,10 @@ Flutter Material 3 UI
           ├─ AVFoundation capture + real CMSampleBuffer timestamps
           ├─ Metal spatial smoothing + temporal amplification + reliable MTKView display
           ├─ AVAssetWriter ProRes 4444 capture and export
-          ├─ Accelerate/vDSP whole-recording temporal FFT band-pass
+          ├─ Accelerate/vDSP whole-recording temporal analysis
           ├─ Metal full-resolution reconstruction from the spectral motion signal
           ├─ Vision ROI translation registration
-          └─ Accelerate/vDSP Hann-windowed FFT and statistics
+          └─ Accelerate/vDSP frequency estimation and statistics
 ```
 
 Full camera frames never cross into Dart. Metal handles the full-frame image path, while Flutter receives compact measurement/status maps plus the finalized local MOV path. Vision and vDSP operate natively. Camera session work and frame processing use dedicated serial queues. Camera authorization is requested before capture configuration, and the MTKView delegate draws processed frames on the UI thread rather than acquiring drawables from the capture callback.
@@ -95,7 +95,7 @@ Run on a physical iPhone to validate camera formats, torch, Photos, actual FPS, 
 
 ## Validation status
 
-Dart tests cover band validation/Nyquist limits, calibration math, calibrated and uncalibrated session CSV behavior, and the timestamp-aware reference band-pass with synthetic sines. Swift tests cover the filter coefficient, synthetic FFT frequency detection, and calibration conversion. GitHub Actions runs formatting, analysis, Dart tests, an unsigned simulator build, and native XCTest on macOS. This Linux development host does not provide Flutter/Xcode; see the latest CI run for Apple-toolchain proof.
+Dart tests cover band validation, calibration and distance math, calibrated and uncalibrated session CSV behavior, and the timestamp-aware reference band-pass with synthetic sines. Swift tests cover filter behavior, synthetic frequency detection, and calibration conversion. GitHub Actions runs formatting, analysis, Dart tests, an unsigned simulator build, and native XCTest on macOS. This Linux development host does not provide Flutter/Xcode; see the latest CI run for Apple-toolchain proof.
 The native GPU engine uses an independently implemented, multi-scale
 gradient-domain Eulerian motion-magnification pipeline. It draws on published
 motion-magnification research, but it is not RDI Technologies software and does

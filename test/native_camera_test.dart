@@ -7,6 +7,9 @@ void main() {
       'targetFps': 60,
       'measuredFps': 59.8,
       'frameWidth': 1080,
+      'horizontalFieldOfView': 42,
+      'horizonRollDegrees': -1.5,
+      'horizonPitchDegrees': 3.25,
       'cameraReady': true,
       'previewActive': true,
       'recording': true,
@@ -21,6 +24,9 @@ void main() {
     });
 
     expect(status.cameraReady, isTrue);
+    expect(status.horizontalFieldOfView, 42);
+    expect(status.horizonRollDegrees, -1.5);
+    expect(status.horizonPitchDegrees, 3.25);
     expect(status.previewActive, isTrue);
     expect(status.recording, isTrue);
     expect(status.postProcessing, isTrue);

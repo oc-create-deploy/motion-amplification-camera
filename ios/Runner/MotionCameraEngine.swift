@@ -1,6 +1,7 @@
 import Accelerate
 import AVFoundation
 import CoreImage
+import CoreMotion
 import MetalKit
 import Photos
 import QuartzCore
@@ -21,12 +22,14 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   private let session = AVCaptureSession(), sessionQueue = DispatchQueue(label: "camera.session"), processingQueue = DispatchQueue(label: "camera.processing", qos: .userInitiated)
   private let output = AVCaptureVideoDataOutput(), commandQueue: MTLCommandQueue, ciContext: CIContext
   private var camera: AVCaptureDevice?, textureCache: CVMetalTextureCache?, view: MTKView?
+  private let motionManager = CMMotionManager()
   private weak var previewLayer: CALayer?
   private var pipeline: MTLComputePipelineState?, fastState: MTLTexture?, slowState: MTLTexture?, outputTexture: MTLTexture?
   private var roi = CGRect(x: 0.2, y: 0.35, width: 0.6, height: 0.4)
   private var previousPixelBuffer: CVPixelBuffer?, lastTimestamp: CMTime?, fpsTimes = [Double](), displacement = [(time: Double, x: Double, y: Double)]()
   private var analyzing = false, needsReset = true, targetFPS = 60.0, measuredFPS = 0.0, lowerHz = 1.0, upperHz = 8.0, gain = 20.0, playbackSpeed = 4.0, quality = "balanced", colorMode = "luminance", processingMode = "precisionFft"
   private var latestImage: CIImage?, droppedFrames = 0, frameIndex = 0, frameWidth = 0, registrationAttempts = 0, registrationSuccesses = 0
+  private var frameHeight = 0
   private var cameraReady = false, previewActive = false, recordingRequested = false
   private var renderFailure: String?
   // EXIF orientation applied in Core Image when an AVCapture connection cannot
@@ -48,6 +51,10 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       renderFailure = "The Metal motion-amplification shader could not be loaded."
     }
     UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+    if motionManager.isDeviceMotionAvailable {
+      motionManager.deviceMotionUpdateInterval = 1.0 / 20.0
+      motionManager.startDeviceMotionUpdates(using: .xArbitraryCorrectedZVertical)
+    }
     NotificationCenter.default.addObserver(self, selector: #selector(orientationChanged), name: UIDevice.orientationDidChangeNotification, object: nil)
   }
 
@@ -69,7 +76,11 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     return try? device.makeComputePipelineState(function: function)
   }
 
-  deinit { NotificationCenter.default.removeObserver(self); UIDevice.current.endGeneratingDeviceOrientationNotifications() }
+  deinit {
+    motionManager.stopDeviceMotionUpdates()
+    NotificationCenter.default.removeObserver(self)
+    UIDevice.current.endGeneratingDeviceOrientationNotifications()
+  }
   @objc private func orientationChanged() {
     let orientation = UIDevice.current.orientation
     sessionQueue.async { [weak self] in
@@ -127,6 +138,20 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     case 3: return 8
     default: return 1
     }
+  }
+
+  static func displayedHorizontalFieldOfView(
+    nativeDegrees: Double,
+    frameWidth: Int,
+    frameHeight: Int
+  ) -> Double {
+    guard nativeDegrees > 0, nativeDegrees < 180,
+          frameWidth > 0, frameHeight > 0 else { return 0 }
+    guard frameHeight > frameWidth else { return nativeDegrees }
+    let nativeRadians = nativeDegrees * .pi / 180
+    return 2 * atan(
+      tan(nativeRadians / 2) * Double(frameWidth) / Double(frameHeight)
+    ) * 180 / .pi
   }
 
   func attach(view: MTKView) {
@@ -221,7 +246,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     quality = args["quality"] as? String ?? "balanced"; colorMode = args["colorMode"] as? String ?? "luminance"
     processingMode = args["processingMode"] as? String ?? "precisionFft"
     let fps = measuredFPS > 0 ? measuredFPS : targetFPS
-    guard lowerHz > 0, upperHz > lowerHz, upperHz < 0.45 * fps else { throw EngineError.invalidBand("Choose 0 < lower < upper < 0.45 × measured FPS.") }
+    guard lowerHz > 0, upperHz > lowerHz, upperHz < 0.45 * fps else { throw EngineError.invalidBand("Choose 0 < lower < upper < 0.45 × the measured sampling rate.") }
     guard [1.0, 2.0, 4.0, 8.0].contains(playbackSpeed) else { throw EngineError.configuration("Choose a saved-video speed of 1×, 2×, 4×, or 8×.") }
     resetFilter(reason: nil)
     if quality == "performance" { requestHighSpeedIfAvailable() }
@@ -566,6 +591,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
       ? rawImage
       : rawImage.oriented(forExifOrientation: softwareExifOrientation)
     frameWidth = Int(image.extent.width)
+    frameHeight = Int(image.extent.height)
     renderFailure = nil
     if recordingRequested { recordingError = nil }
     previewActive = true
@@ -598,6 +624,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     renderFailure = warning
     recordingError = recordingRequested ? warning : recordingError
     frameWidth = Int(image.extent.width)
+    frameHeight = Int(image.extent.height)
     previewActive = true
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
@@ -690,13 +717,28 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     let trackingSuccess = registrationAttempts > 0 ? Double(registrationSuccesses) / Double(registrationAttempts) : 0
     let confidence = trackingSuccess * min(1, Double(recent.count) / 60); return (last.x, last.y, sqrt(Double(meanSquare)), peak, frequency, confidence)
   }
-  private func warning(for pixel: CVPixelBuffer) -> String? { if measuredFPS > 0 && upperHz >= 0.45 * measuredFPS { return "Band exceeds the Nyquist-safe limit for measured FPS." }; if droppedFrames > 3 { droppedFrames = 0; return "Frames dropped — reduce processing quality or improve lighting." }; if let camera, camera.iso > camera.activeFormat.maxISO * 0.8 { return "Low light — add steady lighting and avoid flicker." }; if let camera, abs(camera.exposureTargetOffset) > 1.5 { return "Exposure clipping risk — adjust lighting or exposure." }; let m = metrics(); if m.peak > 12 { return "Excessive camera/scene motion; stabilize the tripod." }; if m.confidence < 0.35 && analyzing { return "Low tracking confidence; select a textured ROI." }; return nil }
+  private func warning(for pixel: CVPixelBuffer) -> String? { if measuredFPS > 0 && upperHz >= 0.45 * measuredFPS { return "Band exceeds the safe limit for the measured sampling rate." }; if droppedFrames > 3 { droppedFrames = 0; return "Frames dropped — reduce processing quality or improve lighting." }; if let camera, camera.iso > camera.activeFormat.maxISO * 0.8 { return "Low light — add steady lighting and avoid flicker." }; if let camera, abs(camera.exposureTargetOffset) > 1.5 { return "Exposure clipping risk — adjust lighting or exposure." }; let m = metrics(); if m.peak > 12 { return "Excessive camera/scene motion; stabilize the tripod." }; if m.confidence < 0.35 && analyzing { return "Low tracking confidence; place the horizon span over a textured target." }; return nil }
   func emitStatus(warning: String? = nil) {
     let m = metrics()
+    let gravity = motionManager.deviceMotion?.gravity
+    let horizonRoll = gravity.map {
+      atan2($0.x, -$0.y) * 180 / .pi
+    } ?? 0
+    let horizonPitch = gravity.map {
+      atan2($0.z, hypot($0.x, $0.y)) * 180 / .pi
+    } ?? 0
+    let horizontalFieldOfView = Self.displayedHorizontalFieldOfView(
+      nativeDegrees: Double(camera?.activeFormat.videoFieldOfView ?? 0),
+      frameWidth: frameWidth,
+      frameHeight: frameHeight
+    )
     var status: [String: Any] = [
       "targetFps": targetFPS,
       "measuredFps": measuredFPS,
       "frameWidth": frameWidth,
+      "horizontalFieldOfView": horizontalFieldOfView,
+      "horizonRollDegrees": horizonRoll,
+      "horizonPitchDegrees": horizonPitch,
       "torchAvailable": camera?.hasTorch ?? false,
       "cameraReady": cameraReady,
       "previewActive": previewActive,

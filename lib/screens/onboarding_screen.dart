@@ -25,7 +25,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     ),
     (
       'Choose a valid frequency band',
-      'Measured frame rate limits the usable band. The app keeps the upper cutoff below 45% of measured FPS and reports dropped frames.',
+      'The measured sampling rate limits the usable band. The app keeps the upper cutoff below 45% of that rate and reports dropped frames.',
       Icons.graphic_eq,
     ),
     (

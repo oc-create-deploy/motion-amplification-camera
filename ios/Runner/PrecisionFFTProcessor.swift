@@ -47,7 +47,7 @@ final class PrecisionFFTProcessor {
     guard let library = try? device.makeLibrary(source: precisionFFTKernelSource, options: nil),
           let function = library.makeFunction(name: "precisionFFTAmplify"),
           let pipeline = try? device.makeComputePipelineState(function: function) else {
-      throw EngineError.configuration("The Precision FFT Metal pipeline could not be created.")
+      throw EngineError.configuration("The precision processing pipeline could not be created.")
     }
     self.pipeline = pipeline
   }
@@ -179,7 +179,7 @@ final class PrecisionFFTProcessor {
     let lumaURL = FileManager.default.temporaryDirectory
       .appendingPathComponent("precision-fft-luma-\(UUID().uuidString).bin")
     guard FileManager.default.createFile(atPath: lumaURL.path, contents: nil) else {
-      throw EngineError.configuration("Precision FFT could not create its temporary timeline.")
+      throw EngineError.configuration("The algorithm could not create its temporary timeline.")
     }
     var completed = false
     defer {
@@ -195,7 +195,7 @@ final class PrecisionFFTProcessor {
     while let sample = output.copyNextSampleBuffer() {
       if timestamps.count >= Self.maximumFrames {
         throw EngineError.configuration(
-          "Precision FFT supports recordings up to about 150 seconds. Shorten the recording or use Live mode."
+          "The algorithm supports recordings up to about 150 seconds. Shorten the recording."
         )
       }
       var timestamp: Double?
@@ -222,7 +222,7 @@ final class PrecisionFFTProcessor {
             attributes as CFDictionary,
             &scratch
           ) == kCVReturnSuccess else {
-            throw EngineError.configuration("Precision FFT could not allocate its analysis buffer.")
+            throw EngineError.configuration("The algorithm could not allocate its analysis buffer.")
           }
         }
         guard let scratch else { return }
@@ -264,10 +264,10 @@ final class PrecisionFFTProcessor {
       }
     }
     if reader.status == .failed {
-      throw reader.error ?? EngineError.configuration("Precision FFT could not decode the source video.")
+      throw reader.error ?? EngineError.configuration("The algorithm could not decode the source video.")
     }
     guard timestamps.count >= 16, gridWidth > 0, gridHeight > 0 else {
-      throw EngineError.configuration("Precision FFT needs at least 16 recorded frames.")
+      throw EngineError.configuration("The algorithm needs at least 16 recorded frames.")
     }
     let duration = max(0.001, (timestamps.last ?? 0) - (timestamps.first ?? 0))
     let sampleRate = Double(timestamps.count - 1) / duration
@@ -294,7 +294,7 @@ final class PrecisionFFTProcessor {
     completion: @escaping (Result<RecordingResult, Error>) -> Void
   ) throws {
     guard let cache = textureCache else {
-      throw EngineError.configuration("Precision FFT cannot access the Metal texture cache.")
+      throw EngineError.configuration("The algorithm cannot access the graphics texture cache.")
     }
     let (reader, output) = try makeReader(url: sourceURL)
     let destinationURL = FileManager.default.temporaryDirectory
@@ -315,7 +315,7 @@ final class PrecisionFFTProcessor {
     )
     bandDescriptor.usage = [.shaderRead]
     guard let bandTexture = device.makeTexture(descriptor: bandDescriptor) else {
-      throw EngineError.configuration("Precision FFT could not allocate its spectral texture.")
+      throw EngineError.configuration("The algorithm could not allocate its processing texture.")
     }
     var frameIndex = 0
     do {
@@ -344,7 +344,7 @@ final class PrecisionFFTProcessor {
             outputTexture = device.makeTexture(descriptor: descriptor)
           }
           guard let outputTexture else {
-            throw EngineError.configuration("Precision FFT could not allocate its output texture.")
+            throw EngineError.configuration("The algorithm could not allocate its output texture.")
           }
           var sourceCVTexture: CVMetalTexture?
           guard CVMetalTextureCacheCreateTextureFromImage(
@@ -359,7 +359,7 @@ final class PrecisionFFTProcessor {
             &sourceCVTexture
           ) == kCVReturnSuccess,
           let sourceTexture = sourceCVTexture.flatMap(CVMetalTextureGetTexture) else {
-            throw EngineError.configuration("Precision FFT could not map a source frame to Metal.")
+            throw EngineError.configuration("The algorithm could not map a source frame for processing.")
           }
           let offset = frameIndex * gridWidth * gridHeight
           bandTexture.replace(
@@ -370,7 +370,7 @@ final class PrecisionFFTProcessor {
           )
           guard let command = commandQueue.makeCommandBuffer(),
                 let encoder = command.makeComputeCommandEncoder() else {
-            throw EngineError.configuration("Precision FFT could not create a Metal command.")
+            throw EngineError.configuration("The algorithm could not create a graphics command.")
           }
           encoder.setComputePipelineState(pipeline)
           encoder.setTexture(sourceTexture, index: 0)
@@ -391,7 +391,7 @@ final class PrecisionFFTProcessor {
                   mtlTexture: outputTexture,
                   options: [.colorSpace: CGColorSpaceCreateDeviceRGB()]
                 ) else {
-            throw command.error ?? EngineError.configuration("Precision FFT failed to render a frame.")
+            throw command.error ?? EngineError.configuration("The algorithm failed to render a frame.")
           }
           try recorder?.append(
             image: image,
@@ -405,11 +405,11 @@ final class PrecisionFFTProcessor {
       }
       if reader.status == .failed {
         throw reader.error ?? EngineError.configuration(
-          "Precision FFT could not decode the source during reconstruction."
+          "The algorithm could not decode the source during reconstruction."
         )
       }
       guard frameIndex == frameCount, let recorder else {
-        throw EngineError.configuration("Precision FFT could not reconstruct every recorded frame.")
+        throw EngineError.configuration("The algorithm could not reconstruct every recorded frame.")
       }
       recorder.finish(completion: completion)
     } catch {
@@ -459,7 +459,7 @@ enum PrecisionFFTBandpass {
     progress: (Double) -> Void = { _ in }
   ) throws -> [Float16] {
     guard frameMajorLuma.count == frameCount * pixelCount else {
-      throw EngineError.configuration("Precision FFT received invalid temporal data.")
+      throw EngineError.configuration("The algorithm received invalid temporal data.")
     }
     var filtered = [Float16](repeating: 0, count: frameCount * pixelCount)
     try filterPixels(
@@ -487,7 +487,7 @@ enum PrecisionFFTBandpass {
   ) throws {
     guard frameCount >= 16, pixelCount > 0, sampleRate > 0,
           lowerHz > 0, upperHz > lowerHz else {
-      throw EngineError.configuration("Precision FFT received invalid temporal data.")
+      throw EngineError.configuration("The algorithm received invalid temporal data.")
     }
     let fftCount = 1 << Int(ceil(log2(Double(frameCount))))
     guard let forward = try? vDSP.DiscreteFourierTransform(
@@ -504,7 +504,7 @@ enum PrecisionFFTBandpass {
       transformType: .complexComplex,
       ofType: Float.self
     ) else {
-      throw EngineError.configuration("Precision FFT could not create its temporal transform.")
+      throw EngineError.configuration("The algorithm could not create its temporal transform.")
     }
     let zeros = [Float](repeating: 0, count: fftCount)
     var signal = [Float](repeating: 0, count: fftCount)
@@ -551,17 +551,17 @@ private final class MappedTimeline {
     let flags = writable ? (O_RDWR | O_CREAT | O_TRUNC) : O_RDONLY
     descriptor = open(url.path, flags, S_IRUSR | S_IWUSR)
     guard descriptor >= 0 else {
-      throw EngineError.configuration("Precision FFT could not open its temporary timeline.")
+      throw EngineError.configuration("The algorithm could not open its temporary timeline.")
     }
     if writable, ftruncate(descriptor, off_t(byteCount)) != 0 {
       close(descriptor)
-      throw EngineError.configuration("Precision FFT could not size its temporary timeline.")
+      throw EngineError.configuration("The algorithm could not size its temporary timeline.")
     }
     let protection = writable ? (PROT_READ | PROT_WRITE) : PROT_READ
     guard let mapped = mmap(nil, byteCount, protection, MAP_SHARED, descriptor, 0),
           mapped != MAP_FAILED else {
       close(descriptor)
-      throw EngineError.configuration("Precision FFT could not map its temporary timeline.")
+      throw EngineError.configuration("The algorithm could not map its temporary timeline.")
     }
     pointer = mapped
   }

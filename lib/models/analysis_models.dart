@@ -77,7 +77,7 @@ class AnalysisParameters {
 
   String? validate(double fps) {
     if (!fps.isFinite || fps <= 0) {
-      return 'Waiting for a valid camera frame rate.';
+      return 'Waiting for a valid camera sampling rate.';
     }
     if (!lowerHz.isFinite || lowerHz <= 0) {
       return 'Lower cutoff must be above 0 Hz.';
@@ -86,7 +86,7 @@ class AnalysisParameters {
       return 'Upper cutoff must exceed lower cutoff.';
     }
     if (upperHz >= 0.45 * fps) {
-      return 'Upper cutoff must stay below 45% of measured FPS.';
+      return 'Upper cutoff must stay below 45% of the measured sampling rate.';
     }
     final maximumGain =
         processingMode == ProcessingMode.precisionFft ? 40 : 250;
@@ -130,14 +130,40 @@ class AnalysisParameters {
 }
 
 class Calibration {
-  const Calibration({required this.pixelsPerMillimeter});
+  const Calibration({
+    required this.pixelsPerMillimeter,
+    this.knownLengthMillimeters = 0,
+    this.referencePixelLength = 0,
+  });
   final double pixelsPerMillimeter;
+  final double knownLengthMillimeters;
+  final double referencePixelLength;
   bool get isValid => pixelsPerMillimeter.isFinite && pixelsPerMillimeter > 0;
+  bool get hasKnownLength =>
+      knownLengthMillimeters.isFinite && knownLengthMillimeters > 0;
   double pixelsToMillimeters(double pixels) {
     if (!isValid) {
       throw StateError('Calibration is not valid');
     }
     return pixels / pixelsPerMillimeter;
+  }
+
+  double? estimatedDistanceMeters({
+    required double horizontalFieldOfViewDegrees,
+    required double referenceWidthFraction,
+  }) {
+    if (!hasKnownLength ||
+        !horizontalFieldOfViewDegrees.isFinite ||
+        horizontalFieldOfViewDegrees <= 0 ||
+        horizontalFieldOfViewDegrees >= 180 ||
+        !referenceWidthFraction.isFinite ||
+        referenceWidthFraction <= 0 ||
+        referenceWidthFraction > 1) {
+      return null;
+    }
+    final halfFovRadians = horizontalFieldOfViewDegrees * math.pi / 360;
+    return (knownLengthMillimeters / 1000) /
+        (2 * referenceWidthFraction * math.tan(halfFovRadians));
   }
 
   static Calibration fromReference({
@@ -150,7 +176,11 @@ class Calibration {
         millimeters <= 0) {
       throw ArgumentError('Reference lengths must be finite and positive');
     }
-    return Calibration(pixelsPerMillimeter: pixelLength / millimeters);
+    return Calibration(
+      pixelsPerMillimeter: pixelLength / millimeters,
+      knownLengthMillimeters: millimeters,
+      referencePixelLength: pixelLength,
+    );
   }
 }
 

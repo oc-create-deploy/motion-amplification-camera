@@ -4,18 +4,39 @@ import '../models/analysis_models.dart';
 
 class CalibrationStore {
   static const _key = 'pixels_per_millimeter';
+  static const _knownLengthKey = 'known_length_millimeters';
+  static const _referencePixelsKey = 'reference_pixel_length';
   Future<Calibration?> load() async {
-    final value = (await SharedPreferences.getInstance()).getDouble(_key);
+    final preferences = await SharedPreferences.getInstance();
+    final value = preferences.getDouble(_key);
     return value != null && value > 0
-        ? Calibration(pixelsPerMillimeter: value)
+        ? Calibration(
+            pixelsPerMillimeter: value,
+            knownLengthMillimeters:
+                preferences.getDouble(_knownLengthKey) ?? 0,
+            referencePixelLength:
+                preferences.getDouble(_referencePixelsKey) ?? 0,
+          )
         : null;
   }
 
-  Future<void> save(Calibration calibration) async =>
-      (await SharedPreferences.getInstance()).setDouble(
-        _key,
-        calibration.pixelsPerMillimeter,
-      );
-  Future<void> clear() async =>
-      (await SharedPreferences.getInstance()).remove(_key);
+  Future<void> save(Calibration calibration) async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setDouble(_key, calibration.pixelsPerMillimeter);
+    await preferences.setDouble(
+      _knownLengthKey,
+      calibration.knownLengthMillimeters,
+    );
+    await preferences.setDouble(
+      _referencePixelsKey,
+      calibration.referencePixelLength,
+    );
+  }
+
+  Future<void> clear() async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.remove(_key);
+    await preferences.remove(_knownLengthKey);
+    await preferences.remove(_referencePixelsKey);
+  }
 }

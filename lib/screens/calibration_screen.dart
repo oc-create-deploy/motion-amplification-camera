@@ -22,7 +22,8 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     final mm = double.tryParse(_controller.text);
     if (mm == null || mm <= 0 || widget.pixelLength <= 0) {
       setState(
-        () => error = 'Enter a positive known length. Select an ROI first.',
+        () => error =
+            'Enter a positive known length and select its span first.',
       );
       return;
     }
@@ -42,11 +43,11 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
           padding: const EdgeInsets.all(20),
           children: [
             const Text(
-              'Place a known-length reference in the same plane as the vibrating target. Resize the ROI so its width spans the reference, edge to edge. Calibration is invalid after camera distance, zoom, orientation, format, or target-plane changes.',
+              'Place a known-length reference in the same plane as the vibrating target. Drag across the preview so the horizon-bar span matches the reference edge to edge. Calibration and automatic distance are invalid after camera position, zoom, orientation, format, or target-plane changes.',
             ),
             const SizedBox(height: 20),
             Text(
-              'Selected reference width: ${widget.pixelLength.toStringAsFixed(1)} px',
+              'Selected horizon span: ${widget.pixelLength.toStringAsFixed(1)} px',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 16),

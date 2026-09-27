@@ -52,6 +52,15 @@ final class MotionCameraEngineTests: XCTestCase {
     XCTAssertEqual(mapped.height, 0.4, accuracy: 0.000_001)
   }
 
+  func testPortraitFieldOfViewUsesDisplayedWidth() {
+    let fieldOfView = MotionCameraEngine.displayedHorizontalFieldOfView(
+      nativeDegrees: 60,
+      frameWidth: 720,
+      frameHeight: 1280
+    )
+    XCTAssertEqual(fieldOfView, 35.98, accuracy: 0.05)
+  }
+
   func testTimestampCoefficientMatchesReference() {
     let fc = 8.0, dt = 1.0 / 60.0
     let alpha = 1.0 - exp(-2.0 * Double.pi * fc * dt)
