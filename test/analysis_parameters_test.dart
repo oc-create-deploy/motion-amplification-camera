@@ -63,6 +63,16 @@ void main() {
         'precisionFft',
       );
       expect(const AnalysisParameters().gain, 8);
+      expect(const AnalysisParameters().playbackSpeed, 4);
+      expect(const AnalysisParameters().toMap()['playbackSpeed'], 4);
+    });
+
+    test('saved-video speed is restricted to supported accelerations', () {
+      expect(const AnalysisParameters(playbackSpeed: 8).validate(60), isNull);
+      expect(
+        const AnalysisParameters(playbackSpeed: 3).validate(60),
+        isNotNull,
+      );
     });
 
     test('precision FFT limits intensity gain independently of live mode', () {

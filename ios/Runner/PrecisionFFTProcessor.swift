@@ -57,6 +57,7 @@ final class PrecisionFFTProcessor {
     lowerHz: Double,
     upperHz: Double,
     gain: Double,
+    playbackSpeed: Double,
     progress: @escaping (Double) -> Void,
     completion: @escaping (Result<RecordingResult, Error>) -> Void
   ) {
@@ -81,6 +82,7 @@ final class PrecisionFFTProcessor {
           gridWidth: timeline.gridWidth,
           gridHeight: timeline.gridHeight,
           gain: gain,
+          playbackSpeed: playbackSpeed,
           expectedFPS: timeline.sampleRate,
           progress: { progress(0.68 + 0.31 * $0) },
           completion: { result in
@@ -286,6 +288,7 @@ final class PrecisionFFTProcessor {
     gridWidth: Int,
     gridHeight: Int,
     gain: Double,
+    playbackSpeed: Double,
     expectedFPS: Double,
     progress: @escaping (Double) -> Void,
     completion: @escaping (Result<RecordingResult, Error>) -> Void
@@ -327,6 +330,7 @@ final class PrecisionFFTProcessor {
               width: width,
               height: height,
               expectedFPS: expectedFPS,
+              playbackSpeed: playbackSpeed,
               ciContext: ciContext,
               expectsMediaDataInRealTime: false
             )

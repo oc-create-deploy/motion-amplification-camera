@@ -69,6 +69,22 @@ final class MotionCameraEngineTests: XCTestCase {
     XCTAssertEqual(presentationTimes.last?.seconds ?? -1, 1, accuracy: 0.000_001)
   }
 
+  func testAcceleratedExportCompressesDurationAndCapsOutputRate() {
+    var timeline = RealTimeVideoTimeline(
+      maximumOutputFPS: 60,
+      playbackSpeed: 4
+    )
+    let presentationTimes = (0...240).compactMap { frame in
+      timeline.presentationTime(
+        for: CMTime(value: CMTimeValue(frame), timescale: 60)
+      )
+    }
+
+    XCTAssertEqual(presentationTimes.count, 61)
+    XCTAssertEqual(presentationTimes.first?.seconds ?? -1, 0)
+    XCTAssertEqual(presentationTimes.last?.seconds ?? -1, 1, accuracy: 0.000_001)
+  }
+
   func testRecorderUsesHighFidelityProResWithoutCompressionProperties() {
     let settings = AmplifiedVideoRecorder.videoSettings(width: 1280, height: 720)
 

@@ -20,7 +20,7 @@ class AboutScreen extends StatelessWidget {
             ),
             _Section(
               'Algorithm',
-              'Saved videos use Precision FFT only. The app records a high-fidelity source, applies a zero-phase temporal FFT band-pass across the complete recording, then adds only that filtered luminance variation back to the untouched source frames. It does not spatially warp or resample the source image. The live preview remains unamplified so it accurately represents framing and focus. Vision registration estimates ROI translation; a Hann-windowed vDSP FFT estimates dominant frequency.',
+              'Saved videos use Precision FFT only. The app records a high-fidelity source, applies a zero-phase temporal FFT band-pass across the complete recording, then adds only that filtered luminance variation back to the untouched source frames. It does not spatially warp or resample the source image. Saved playback can be accelerated from 1× to 8× without changing the FFT analysis timing, making very slow movement easier to compare. The live preview remains unamplified so it accurately represents framing and focus. Vision registration estimates ROI translation; a Hann-windowed vDSP FFT estimates dominant frequency.',
             ),
             _Section(
               'Limitations',

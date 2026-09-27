@@ -58,6 +58,7 @@ class AnalysisParameters {
     this.quality = ProcessingQuality.balanced,
     this.colorMode = ColorMode.luminance,
     this.processingMode = ProcessingMode.precisionFft,
+    this.playbackSpeed = 4.0,
   });
 
   final double lowerHz;
@@ -66,6 +67,7 @@ class AnalysisParameters {
   final ProcessingQuality quality;
   final ColorMode colorMode;
   final ProcessingMode processingMode;
+  final double playbackSpeed;
 
   RecordingDurationGuidance get durationGuidance =>
       RecordingDurationGuidance.forBand(
@@ -91,6 +93,9 @@ class AnalysisParameters {
     if (!gain.isFinite || gain < 0 || gain > maximumGain) {
       return 'Gain must be between 0 and $maximumGain in this mode.';
     }
+    if (!const [1.0, 2.0, 4.0, 8.0].contains(playbackSpeed)) {
+      return 'Saved-video speed must be 1×, 2×, 4×, or 8×.';
+    }
     return null;
   }
 
@@ -101,6 +106,7 @@ class AnalysisParameters {
     ProcessingQuality? quality,
     ColorMode? colorMode,
     ProcessingMode? processingMode,
+    double? playbackSpeed,
   }) =>
       AnalysisParameters(
         lowerHz: lowerHz ?? this.lowerHz,
@@ -109,6 +115,7 @@ class AnalysisParameters {
         quality: quality ?? this.quality,
         colorMode: colorMode ?? this.colorMode,
         processingMode: processingMode ?? this.processingMode,
+        playbackSpeed: playbackSpeed ?? this.playbackSpeed,
       );
 
   Map<String, Object> toMap() => {
@@ -118,6 +125,7 @@ class AnalysisParameters {
         'quality': quality.name,
         'colorMode': colorMode.name,
         'processingMode': processingMode.name,
+        'playbackSpeed': playbackSpeed,
       };
 }
 
@@ -214,7 +222,7 @@ class SessionResult {
             .pixelsToMillimeters(measurement.peakPixels)
             .toStringAsFixed(6)
         : '';
-    return 'started_at,duration_s,fps,lower_hz,upper_hz,gain,dominant_hz,rms_px,peak_px,pixels_per_mm,rms_mm,peak_mm,confidence\n'
-        '${startedAt.toIso8601String()},${durationSeconds.toStringAsFixed(3)},${measuredFps.toStringAsFixed(3)},${parameters.lowerHz},${parameters.upperHz},${parameters.gain},${measurement.dominantHz.toStringAsFixed(4)},${measurement.rmsPixels.toStringAsFixed(4)},${measurement.peakPixels.toStringAsFixed(4)},$calibrationValue,$rmsMm,$peakMm,${measurement.confidence.toStringAsFixed(3)}\n';
+    return 'started_at,duration_s,fps,lower_hz,upper_hz,gain,playback_speed,dominant_hz,rms_px,peak_px,pixels_per_mm,rms_mm,peak_mm,confidence\n'
+        '${startedAt.toIso8601String()},${durationSeconds.toStringAsFixed(3)},${measuredFps.toStringAsFixed(3)},${parameters.lowerHz},${parameters.upperHz},${parameters.gain},${parameters.playbackSpeed},${measurement.dominantHz.toStringAsFixed(4)},${measurement.rmsPixels.toStringAsFixed(4)},${measurement.peakPixels.toStringAsFixed(4)},$calibrationValue,$rmsMm,$peakMm,${measurement.confidence.toStringAsFixed(3)}\n';
   }
 }

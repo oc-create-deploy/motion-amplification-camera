@@ -25,7 +25,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
   private var pipeline: MTLComputePipelineState?, fastState: MTLTexture?, slowState: MTLTexture?, outputTexture: MTLTexture?
   private var roi = CGRect(x: 0.2, y: 0.35, width: 0.6, height: 0.4)
   private var previousPixelBuffer: CVPixelBuffer?, lastTimestamp: CMTime?, fpsTimes = [Double](), displacement = [(time: Double, x: Double, y: Double)]()
-  private var analyzing = false, needsReset = true, targetFPS = 60.0, measuredFPS = 0.0, lowerHz = 1.0, upperHz = 8.0, gain = 20.0, quality = "balanced", colorMode = "luminance", processingMode = "precisionFft"
+  private var analyzing = false, needsReset = true, targetFPS = 60.0, measuredFPS = 0.0, lowerHz = 1.0, upperHz = 8.0, gain = 20.0, playbackSpeed = 4.0, quality = "balanced", colorMode = "luminance", processingMode = "precisionFft"
   private var latestImage: CIImage?, droppedFrames = 0, frameIndex = 0, frameWidth = 0, registrationAttempts = 0, registrationSuccesses = 0
   private var cameraReady = false, previewActive = false, recordingRequested = false
   private var renderFailure: String?
@@ -217,10 +217,12 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
 
   func configure(_ args: [String: Any]) throws {
     lowerHz = args["lowerHz"] as? Double ?? 1; upperHz = args["upperHz"] as? Double ?? 8; gain = args["gain"] as? Double ?? 20
+    playbackSpeed = args["playbackSpeed"] as? Double ?? 4
     quality = args["quality"] as? String ?? "balanced"; colorMode = args["colorMode"] as? String ?? "luminance"
     processingMode = args["processingMode"] as? String ?? "precisionFft"
     let fps = measuredFPS > 0 ? measuredFPS : targetFPS
     guard lowerHz > 0, upperHz > lowerHz, upperHz < 0.45 * fps else { throw EngineError.invalidBand("Choose 0 < lower < upper < 0.45 × measured FPS.") }
+    guard [1.0, 2.0, 4.0, 8.0].contains(playbackSpeed) else { throw EngineError.configuration("Choose a saved-video speed of 1×, 2×, 4×, or 8×.") }
     resetFilter(reason: nil)
     if quality == "performance" { requestHighSpeedIfAvailable() }
   }
@@ -352,6 +354,7 @@ final class MotionCameraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDe
         lowerHz: lowerHz,
         upperHz: upperHz,
         gain: gain,
+        playbackSpeed: playbackSpeed,
         progress: { [weak self] progress in
           guard let self else { return }
           processingQueue.async { [weak self] in
@@ -780,6 +783,7 @@ final class AmplifiedVideoRecorder {
     width: Int,
     height: Int,
     expectedFPS: Double,
+    playbackSpeed: Double = 1,
     ciContext: CIContext,
     expectsMediaDataInRealTime: Bool = true
   ) throws {
@@ -789,12 +793,16 @@ final class AmplifiedVideoRecorder {
     self.outputURL = outputURL
     self.ciContext = ciContext
     self.expectsMediaDataInRealTime = expectsMediaDataInRealTime
-    // High-speed capture is useful for motion analysis, but exported 120 FPS
-    // clips can be treated as slow-motion media by players. Keep analysis at
-    // the camera's full rate while exporting a standard, real-time 60 FPS
-    // timeline. Excess frames are dropped rather than stretching playback.
+    // Analysis always uses the camera's original timestamps. The writer may
+    // intentionally compress only the final presentation timeline so slow
+    // structural movement is easier to inspect. Frames are dropped as needed
+    // to keep the accelerated result at a broadly compatible 60 FPS instead
+    // of producing a 240/480 FPS asset.
     let exportFPS = min(60.0, max(24.0, expectedFPS.rounded()))
-    timeline = RealTimeVideoTimeline(maximumOutputFPS: exportFPS)
+    timeline = RealTimeVideoTimeline(
+      maximumOutputFPS: exportFPS,
+      playbackSpeed: playbackSpeed
+    )
     try? FileManager.default.removeItem(at: outputURL)
     writer = try AVAssetWriter(outputURL: outputURL, fileType: Self.outputFileType)
     let settings = Self.videoSettings(width: width, height: height)
@@ -904,11 +912,13 @@ final class AmplifiedVideoRecorder {
 
 struct RealTimeVideoTimeline {
   let maximumOutputFPS: Double
+  let playbackSpeed: Double
   private var firstSourceTimestamp: CMTime?
   private var lastPresentationTimestamp: CMTime?
 
-  init(maximumOutputFPS: Double) {
+  init(maximumOutputFPS: Double, playbackSpeed: Double = 1) {
     self.maximumOutputFPS = max(1, maximumOutputFPS)
+    self.playbackSpeed = max(1, playbackSpeed)
   }
 
   mutating func presentationTime(for sourceTimestamp: CMTime) -> CMTime? {
@@ -919,10 +929,16 @@ struct RealTimeVideoTimeline {
       return .zero
     }
 
-    let elapsed = CMTimeSubtract(sourceTimestamp, firstSourceTimestamp)
-    guard elapsed.isValid, elapsed.isNumeric, CMTimeCompare(elapsed, .zero) > 0 else {
+    let sourceElapsed = CMTimeSubtract(sourceTimestamp, firstSourceTimestamp)
+    guard sourceElapsed.isValid,
+          sourceElapsed.isNumeric,
+          CMTimeCompare(sourceElapsed, .zero) > 0 else {
       return nil
     }
+    let elapsed = CMTimeMultiplyByFloat64(
+      sourceElapsed,
+      multiplier: 1 / playbackSpeed
+    )
     if let lastPresentationTimestamp {
       let interval = CMTimeSubtract(elapsed, lastPresentationTimestamp)
       let minimumInterval = CMTime(

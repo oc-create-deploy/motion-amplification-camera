@@ -12,7 +12,7 @@ An iPhone-only Flutter application that visualizes subtle periodic structural mo
 - Start/stop analysis beside the preview, touch-drag ROI, gain/band controls, luma/color modes, three processing quality settings, torch, exposure compensation, and focus/exposure/white-balance locks.
 - ROI translation in pixels, RMS/peak displacement, dominant frequency, confidence, compact history chart, and explicit warnings.
 - Known-length calibration stored locally; millimeters never appear unless calibration is valid.
-- Saved video always uses Precision FFT: it records an unamplified ProRes source, applies a zero-phase temporal FFT band-pass across the complete recording, and adds the selected luminance variation back to each untouched full-resolution source frame. It performs no spatial warp or source resampling, preserving source detail in the final ProRes 4444 MOV.
+- Saved video always uses Precision FFT: it records an unamplified ProRes source, applies a zero-phase temporal FFT band-pass across the complete recording, and adds the selected luminance variation back to each untouched full-resolution source frame. It performs no spatial warp or source resampling, preserving source detail in the final ProRes 4444 MOV. Export playback can be accelerated at 1×, 2×, 4× (default), or 8× while FFT analysis continues to use the original capture timestamps.
 - Frequency-aware guidance recommends at least two cycles and preferably three; for 0.02 Hz, that is 100 seconds minimum and 150 seconds recommended.
 - Processed still snapshots and amplified videos are saved to Photos only after explicit user action and add-only permission.
 - Safety onboarding, accessibility semantics, Dynamic Type-friendly scrolling, dark industrial theme, privacy/about/limitations content.

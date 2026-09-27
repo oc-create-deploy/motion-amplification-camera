@@ -494,6 +494,58 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                       parameters = parameters.copyWith(gain: v),
                                 ),
                       ),
+                      Card(
+                        margin: const EdgeInsets.only(top: 4, bottom: 10),
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Row(
+                                children: [
+                                  Icon(Icons.speed, size: 19),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Saved video speed',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              SizedBox(
+                                width: double.infinity,
+                                child: SegmentedButton<double>(
+                                  segments: const [
+                                    ButtonSegment(value: 1, label: Text('1×')),
+                                    ButtonSegment(value: 2, label: Text('2×')),
+                                    ButtonSegment(value: 4, label: Text('4×')),
+                                    ButtonSegment(value: 8, label: Text('8×')),
+                                  ],
+                                  selected: {parameters.playbackSpeed},
+                                  onSelectionChanged: analyzing
+                                      ? null
+                                      : (selection) => setState(
+                                            () => parameters =
+                                                parameters.copyWith(
+                                              playbackSpeed: selection.first,
+                                            ),
+                                          ),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'FFT analysis uses the original capture timing. Only the saved result is accelerated so slow movement is easier to compare.',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(color: Colors.white60),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                       _SliderRow(
                         label: 'Low cutoff',
                         value: parameters.lowerHz,
@@ -598,7 +650,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               SizedBox(width: 8),
                               Expanded(
                                 child: Text(
-                                  'FFT-only saved video: the selected temporal luminance signal is added to the original sharp frames. No spatial warp is applied.',
+                                  'FFT-only saved video: the selected temporal luminance signal is added to the original sharp frames, then playback is accelerated at the selected speed. No spatial warp is applied.',
                                 ),
                               ),
                             ],
@@ -1002,6 +1054,10 @@ class SessionSummaryScreen extends StatelessWidget {
             _SummaryRow(
               'Amplified video',
               '${video.durationSeconds.toStringAsFixed(1)} s · ${video.frameCount} frames · ProRes 4444 MOV',
+            ),
+            _SummaryRow(
+              'Playback speed',
+              '${result.parameters.playbackSpeed.toStringAsFixed(0)}×',
             ),
             _SummaryRow('Measured FPS', result.measuredFps.toStringAsFixed(2)),
             _SummaryRow(
