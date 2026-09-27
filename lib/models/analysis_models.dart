@@ -86,7 +86,8 @@ class AnalysisParameters {
     if (upperHz >= 0.45 * fps) {
       return 'Upper cutoff must stay below 45% of measured FPS.';
     }
-    final maximumGain = processingMode == ProcessingMode.precisionFft ? 40 : 250;
+    final maximumGain =
+        processingMode == ProcessingMode.precisionFft ? 40 : 250;
     if (!gain.isFinite || gain < 0 || gain > maximumGain) {
       return 'Gain must be between 0 and $maximumGain in this mode.';
     }
