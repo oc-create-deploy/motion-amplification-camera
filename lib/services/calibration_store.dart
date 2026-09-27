@@ -12,8 +12,7 @@ class CalibrationStore {
     return value != null && value > 0
         ? Calibration(
             pixelsPerMillimeter: value,
-            knownLengthMillimeters:
-                preferences.getDouble(_knownLengthKey) ?? 0,
+            knownLengthMillimeters: preferences.getDouble(_knownLengthKey) ?? 0,
             referencePixelLength:
                 preferences.getDouble(_referencePixelsKey) ?? 0,
           )

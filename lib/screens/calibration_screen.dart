@@ -22,8 +22,8 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     final mm = double.tryParse(_controller.text);
     if (mm == null || mm <= 0 || widget.pixelLength <= 0) {
       setState(
-        () => error =
-            'Enter a positive known length and select its span first.',
+        () =>
+            error = 'Enter a positive known length and select its span first.',
       );
       return;
     }

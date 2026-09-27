@@ -472,10 +472,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             );
                             final left = math.min(dragStart!.dx, end.dx);
                             final right = math.max(dragStart!.dx, end.dx);
-                            final centerY =
-                                ((dragStart!.dy + end.dy) / 2)
-                                    .clamp(.14, .86)
-                                    .toDouble();
+                            final centerY = ((dragStart!.dy + end.dy) / 2)
+                                .clamp(.14, .86)
+                                .toDouble();
                             setState(
                               () => roi = Rect.fromCenter(
                                 center: Offset((left + right) / 2, centerY),
@@ -1031,8 +1030,7 @@ class _HorizonPainter extends CustomPainter {
       roi.center.dx.clamp(0, 1).toDouble() * size.width,
       roi.center.dy.clamp(0, 1).toDouble() * size.height,
     );
-    final halfWidth =
-        roi.width.abs().clamp(.03, 1).toDouble() * size.width / 2;
+    final halfWidth = roi.width.abs().clamp(.03, 1).toDouble() * size.width / 2;
     final color = active ? Colors.cyanAccent : Colors.amber;
     final isLevel = rollDegrees.abs() <= 1.0;
     final paint = Paint()
@@ -1059,9 +1057,7 @@ class _HorizonPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _HorizonPainter old) =>
-      old.roi != roi ||
-      old.rollDegrees != rollDegrees ||
-      old.active != active;
+      old.roi != roi || old.rollDegrees != rollDegrees || old.active != active;
 }
 
 class _StableToggle extends StatelessWidget {
